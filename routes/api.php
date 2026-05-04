@@ -1,0 +1,169 @@
+<?php
+
+use App\Http\Controllers\Api\AbonoController;
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\CajaController;
+use App\Http\Controllers\Api\CategoriaController;
+use App\Http\Controllers\Api\ClienteController;
+use App\Http\Controllers\Api\ConfiguracionController;
+use App\Http\Controllers\Api\MercadoLibreController;
+use App\Http\Controllers\Api\ProductoController;
+use App\Http\Controllers\Api\UsuarioController;
+use App\Http\Controllers\Api\VentaController;
+use App\Http\Controllers\Api\ReportesController;
+use App\Http\Controllers\Api\RolPermisoController;
+use Illuminate\Support\Facades\Route;
+
+Route::prefix('auth')->group(function () {
+    Route::post('login', [AuthController::class, 'login']);
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('logout', [AuthController::class, 'logout']);
+        Route::get('me', [AuthController::class, 'me']);
+    });
+});
+
+Route::middleware('auth:sanctum')->group(function () {
+
+    // Dashboard
+    Route::middleware('can:ver dashboard')->group(function () {
+    });
+
+    // Productos
+    Route::middleware('can:ver productos')->group(function () {
+        Route::get('productos/buscar', [ProductoController::class, 'buscar']);
+        Route::get('productos', [ProductoController::class, 'index']);
+        Route::get('productos/{producto}', [ProductoController::class, 'show']);
+    });
+    Route::middleware('can:gestionar productos')->group(function () {
+        Route::post('productos', [ProductoController::class, 'store']);
+        Route::put('productos/{producto}', [ProductoController::class, 'update']);
+        Route::delete('productos/{producto}', [ProductoController::class, 'destroy']);
+    });
+
+    // Categorías
+    Route::middleware('can:ver categorias')->group(function () {
+        Route::get('categorias', [CategoriaController::class, 'index']);
+        Route::get('categorias/{categoria}', [CategoriaController::class, 'show']);
+    });
+    Route::middleware('can:gestionar categorias')->group(function () {
+        Route::post('categorias', [CategoriaController::class, 'store']);
+        Route::put('categorias/{categoria}', [CategoriaController::class, 'update']);
+        Route::delete('categorias/{categoria}', [CategoriaController::class, 'destroy']);
+    });
+
+    // Clientes
+    Route::middleware('can:ver clientes')->group(function () {
+        Route::get('clientes', [ClienteController::class, 'index']);
+        Route::get('clientes/{cliente}', [ClienteController::class, 'show']);
+        Route::get('clientes/{cliente}/resumen', [AbonoController::class, 'resumen']);
+    });
+    Route::middleware('can:gestionar clientes')->group(function () {
+        Route::post('clientes', [ClienteController::class, 'store']);
+        Route::put('clientes/{cliente}', [ClienteController::class, 'update']);
+        Route::delete('clientes/{cliente}', [ClienteController::class, 'destroy']);
+    });
+
+    // Abonos
+    Route::middleware('can:ver abonos')->group(function () {
+        Route::get('abonos', [AbonoController::class, 'index']);
+    });
+    Route::middleware('can:gestionar abonos')->group(function () {
+        Route::post('abonos', [AbonoController::class, 'store']);
+    });
+
+    // Ventas
+    Route::middleware('can:ver ventas')->group(function () {
+        Route::get('ventas', [VentaController::class, 'index']);
+        Route::get('ventas/{venta}', [VentaController::class, 'show']);
+        Route::get('ventas/{venta}/ticket', [VentaController::class, 'ticket']);
+    });
+    Route::middleware('can:realizar ventas')->group(function () {
+        Route::post('ventas', [VentaController::class, 'store']);
+    });
+    Route::middleware('can:cancelar ventas')->group(function () {
+        Route::post('ventas/{venta}/cancelar', [VentaController::class, 'cancelar']);
+    });
+
+    // Caja
+    Route::prefix('caja')->group(function () {
+        Route::get('actual', [CajaController::class, 'actual']);
+        Route::post('abrir', [CajaController::class, 'abrir']);
+        Route::post('cerrar', [CajaController::class, 'cerrar']);
+        Route::get('cortes', [CajaController::class, 'cortes']);
+        Route::get('cortes/{caja}', [CajaController::class, 'corte']);
+    });
+
+    // Reportes
+    Route::middleware('can:ver reportes')->group(function () {
+        Route::prefix('reportes')->group(function () {
+            Route::get('general', [ReportesController::class, 'general']);
+            Route::get('ventas-por-dia', [ReportesController::class, 'ventasPorDia']);
+            Route::get('productos-top', [ReportesController::class, 'productosTop']);
+            Route::get('categorias', [ReportesController::class, 'categoriasReporte']);
+            Route::get('stock-bajo', [ReportesController::class, 'stockBajo']);
+        });
+    });
+
+    // Usuarios
+    Route::middleware('can:ver usuarios')->group(function () {
+        Route::get('usuarios', [UsuarioController::class, 'index']);
+        Route::get('usuarios/{usuario}', [UsuarioController::class, 'show']);
+    });
+    Route::middleware('can:gestionar usuarios')->group(function () {
+        Route::post('usuarios', [UsuarioController::class, 'store']);
+        Route::put('usuarios/{usuario}', [UsuarioController::class, 'update']);
+        Route::patch('usuarios/{usuario}/toggle', [UsuarioController::class, 'toggle']);
+    });
+
+    // Configuración
+    Route::middleware('can:gestionar configuracion')->group(function () {
+        Route::get('configuracion', [ConfiguracionController::class, 'show']);
+        Route::put('configuracion', [ConfiguracionController::class, 'update']);
+        Route::patch('configuracion', [ConfiguracionController::class, 'update']);
+        Route::post('configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
+        Route::delete('configuracion/logo', [ConfiguracionController::class, 'deleteLogo']);
+    });
+
+    // Roles y permisos
+    Route::middleware('can:gestionar roles')->group(function () {
+        Route::apiResource('roles', RolPermisoController::class)->except(['show']);
+        Route::get('permisos', [RolPermisoController::class, 'permisos']);
+    });
+
+    // Mercado Libre
+    Route::prefix('mercado-libre')->group(function () {
+        Route::middleware('can:gestionar configuracion')->group(function () {
+            Route::get('config', [MercadoLibreController::class, 'config']);
+            Route::post('config', [MercadoLibreController::class, 'saveConfig']);
+            Route::get('auth-url', [MercadoLibreController::class, 'authUrl']);
+            Route::post('disconnect', [MercadoLibreController::class, 'disconnect']);
+            Route::post('refresh', [MercadoLibreController::class, 'refresh']);
+            Route::post('sync-all-stock', [MercadoLibreController::class, 'syncAllStock']);
+            Route::get('categories', [MercadoLibreController::class, 'searchCategories']);
+            Route::get('site-categories', [MercadoLibreController::class, 'getSiteCategories']);
+            Route::get('categories/{categoryId}/children', [MercadoLibreController::class, 'getCategoryChildren']);
+            Route::get('categories/{categoryId}/attributes', [MercadoLibreController::class, 'getCategoryAttributes']);
+            Route::get('categories/{categoryId}', [MercadoLibreController::class, 'getCategoryInfo']);
+            Route::get('products', [MercadoLibreController::class, 'productsMeli']);
+            Route::post('create-test-user', [MercadoLibreController::class, 'createTestUser']);
+            Route::post('toggle-sandbox', [MercadoLibreController::class, 'toggleSandbox']);
+            Route::post('clear-test-user', [MercadoLibreController::class, 'clearTestUser']);
+        });
+
+        Route::middleware('can:gestionar productos')->group(function () {
+            Route::post('productos/{producto}/publish', [MercadoLibreController::class, 'publish']);
+            Route::post('productos/{producto}/sync-stock', [MercadoLibreController::class, 'syncStock']);
+            Route::post('productos/{producto}/sync-price', [MercadoLibreController::class, 'syncPrice']);
+            Route::post('productos/{producto}/pause', [MercadoLibreController::class, 'pause']);
+            Route::post('productos/{producto}/reactivate', [MercadoLibreController::class, 'reactivate']);
+            Route::delete('productos/{producto}/unlink', [MercadoLibreController::class, 'unlink']);
+            Route::get('productos/{producto}/info', [MercadoLibreController::class, 'productInfo']);
+        });
+    });
+});
+
+// Mercado Libre OAuth callback (no auth required - ML redirects here)
+Route::get('mercado-libre/callback', [MercadoLibreController::class, 'callback'])->name('mercado-libre.callback');
+
+// Mercado Libre webhook (no auth required - ML sends directly)
+Route::post('mercado-libre/webhook', [MercadoLibreController::class, 'webhook']);
