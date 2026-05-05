@@ -6,11 +6,14 @@ use App\Http\Controllers\Api\CajaController;
 use App\Http\Controllers\Api\CategoriaController;
 use App\Http\Controllers\Api\ClienteController;
 use App\Http\Controllers\Api\ConfiguracionController;
+use App\Http\Controllers\Api\CortesController;
 use App\Http\Controllers\Api\MercadoLibreController;
 use App\Http\Controllers\Api\ProductoController;
 use App\Http\Controllers\Api\UsuarioController;
 use App\Http\Controllers\Api\VentaController;
 use App\Http\Controllers\Api\ReportesController;
+use App\Http\Controllers\Api\ProveedorController;
+use App\Http\Controllers\Api\PagoProveedorController;
 use App\Http\Controllers\Api\RolPermisoController;
 use Illuminate\Support\Facades\Route;
 
@@ -76,7 +79,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('ventas', [VentaController::class, 'index']);
         Route::get('ventas/{venta}', [VentaController::class, 'show']);
         Route::get('ventas/{venta}/ticket', [VentaController::class, 'ticket']);
-    });
+        Route::post('ventas/{venta}/imprimir-termico', [VentaController::class, 'imprimirTermico']);
+     });
     Route::middleware('can:realizar ventas')->group(function () {
         Route::post('ventas', [VentaController::class, 'store']);
     });
@@ -93,6 +97,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('cortes/{caja}', [CajaController::class, 'corte']);
     });
 
+    // Cortes
+    Route::middleware('can:ver cortes')->group(function () {
+        Route::get('cortes/hoy', [CortesController::class, 'hoy']);
+        Route::get('cortes/{id}/ticket', [CortesController::class, 'ticket']);
+    });
+    Route::middleware('can:gestionar cortes')->group(function () {
+        Route::post('cortes/generar', [CortesController::class, 'generar']);
+    });
+
     // Reportes
     Route::middleware('can:ver reportes')->group(function () {
         Route::prefix('reportes')->group(function () {
@@ -102,6 +115,28 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('categorias', [ReportesController::class, 'categoriasReporte']);
             Route::get('stock-bajo', [ReportesController::class, 'stockBajo']);
         });
+    });
+
+    // Proveedores
+    Route::middleware('can:ver proveedores')->group(function () {
+        Route::get('proveedores', [ProveedorController::class, 'index']);
+        Route::get('proveedores/{proveedor}', [ProveedorController::class, 'show']);
+    });
+    Route::middleware('can:gestionar proveedores')->group(function () {
+        Route::post('proveedores', [ProveedorController::class, 'store']);
+        Route::put('proveedores/{proveedor}', [ProveedorController::class, 'update']);
+        Route::patch('proveedores/{proveedor}/toggle', [ProveedorController::class, 'toggle']);
+        Route::delete('proveedores/{proveedor}', [ProveedorController::class, 'destroy']);
+    });
+
+    // Pagos a proveedores
+    Route::middleware('can:ver pagos proveedores')->group(function () {
+        Route::get('pagos-proveedores', [PagoProveedorController::class, 'index']);
+    });
+    Route::middleware('can:gestionar pagos proveedores')->group(function () {
+        Route::post('pagos-proveedores', [PagoProveedorController::class, 'store']);
+        Route::put('pagos-proveedores/{pagoProveedor}', [PagoProveedorController::class, 'update']);
+        Route::delete('pagos-proveedores/{pagoProveedor}', [PagoProveedorController::class, 'destroy']);
     });
 
     // Usuarios

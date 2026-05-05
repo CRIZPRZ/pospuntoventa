@@ -52,6 +52,7 @@ GET    /caja/cortes
 GET/POST /ventas
 POST   /ventas/{id}/cancelar
 GET    /ventas/{id}/ticket
+POST   /ventas/{id}/imprimir-termico
 ```
 
 ## Integración Mercado Libre
@@ -72,3 +73,36 @@ GET    /ventas/{id}/ticket
 ## Credenciales de prueba (después del seed)
 - Admin: admin@ventas.com / password
 - Cajero: cajero@ventas.com / password
+
+## Módulo Proveedores
+- `app/Models/Proveedor.php`: `$table = 'proveedores'` OBLIGATORIO (sin esto Laravel busca "proveedors")
+- `app/Http/Controllers/Api/ProveedorController.php`: CRUD estándar, destroy bloquea si tiene productos
+- Permisos: `ver proveedores`, `gestionar proveedores`
+- Relación: `Producto belongsTo Proveedor` via `proveedor_id nullable`
+- `ProductoController` incluye `proveedor` en todos los `with([...])`
+
+## Regla crítica: nombres de tabla en español
+Siempre declarar `protected $table = 'nombre_plural_correcto'` en modelos con nombre en español.
+Ejemplos donde Laravel falla: Proveedor→proveedors, Almacen→almacens, Imagen→imagenes-falla.
+Siempre verificar que la tabla en migration y `$table` del model coincidan.
+
+## Patrón: nuevo módulo backend
+1. Migration + softDeletes para entidades principales
+2. Model: `$table` explícito, `$fillable`, `$casts`, relaciones
+3. Controller: index(busqueda q), store, show, update, destroy(guard), toggle
+4. Rutas agrupadas por permiso en `api.php`
+5. RolesSeeder: permisos al array global + asignar a roles
+
+## Estado del proyecto
+- [x] Estructura base Laravel 13
+- [x] Docker configurado (puertos separados del proyecto salon)
+- [x] Migraciones completas del esquema POS
+- [x] Modelos con relaciones y fillable
+- [x] Auth con Sanctum
+- [x] Roles con Spatie (admin, supervisor, cajero)
+- [x] Seeders con usuarios y permisos base
+- [x] Rutas API definidas
+- [x] Controllers con lógica completa para ventas
+- [x] Generación e impresión de tickets térmicos (mike42/escpos-php)
+- [x] Módulo Proveedores (CRUD + FK en productos)
+- [ ] Reportes (pendiente)

@@ -85,6 +85,11 @@ class ConfiguracionController extends Controller
                 'requiere_caja' => true,
             ],
             'impresion' => [
+                'tipo_impresora' => 'smb',
+                'impresora_ip' => '192.168.100.77',
+                'impresora_puerto' => '9100',
+                'impresora_nombre' => 'STMicroelectronics_YZX_Printer',
+                'ancho_papel' => '80',
                 'imprimir_auto' => true,
                 'mostrar_logo' => true,
                 'pie_ticket' => 'Gracias por su compra',

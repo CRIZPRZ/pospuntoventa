@@ -67,6 +67,7 @@ GET    /caja/cortes
 GET/POST /ventas
 POST   /ventas/{id}/cancelar
 GET    /ventas/{id}/ticket
+POST   /ventas/{id}/imprimir-termico
 ```
 
 ## Integración Mercado Libre
@@ -88,6 +89,22 @@ GET    /ventas/{id}/ticket
 - Admin: admin@ventas.com / password
 - Cajero: cajero@ventas.com / password
 
+## Módulo Proveedores
+- Model: `app/Models/Proveedor.php` — tabla `proveedores` (declarada explícitamente en `$table` porque Laravel pluraliza en inglés → "proveedors")
+- Controller: `app/Http/Controllers/Api/ProveedorController.php` — index(q search), store, show(+productos), update, destroy(bloquea si tiene productos), toggle
+- Rutas: `GET/POST /api/proveedores`, `GET/PUT/DELETE/PATCH /api/proveedores/{proveedor}`
+- FK en productos: `proveedor_id nullable` con `nullOnDelete` — relación `Producto belongsTo Proveedor`
+- `ProductoController` carga `proveedor` en todos los with(['categoria', 'proveedor', 'mercadoLibre'])
+- Permisos: `ver proveedores` (admin+supervisor), `gestionar proveedores` (admin only)
+- **IMPORTANTE**: siempre declarar `protected $table = 'proveedores'` en modelos con nombre en español cuya pluralización inglesa difiere (proveedor→proveedors, almacen→almacens, etc.)
+
+## Patrón: nuevo módulo backend
+1. Migration con `$table->softDeletes()` si es entidad principal
+2. Model: `$table` explícito si nombre en español, `$fillable`, `$casts`, relaciones
+3. Controller: métodos index(search q), store(validate+create), show(load relations), update(validate+update), destroy(guard si hay dependencias), toggle(bool activo)
+4. Rutas en `api.php`: agrupar por permiso `can:ver X` para GET y `can:gestionar X` para POST/PUT/PATCH/DELETE
+5. RolesSeeder: agregar permisos al array y asignar a roles apropiados
+
 ## Estado del proyecto
 - [x] Estructura base Laravel 13
 - [x] Docker configurado (puertos separados del proyecto salon)
@@ -97,6 +114,7 @@ GET    /ventas/{id}/ticket
 - [x] Roles con Spatie (admin, supervisor, cajero)
 - [x] Seeders con usuarios y permisos base
 - [x] Rutas API definidas
-- [ ] Controllers con lógica completa (pendiente por módulo)
-- [ ] Generación e impresión de tickets (pendiente)
+- [x] Controllers con lógica completa para ventas
+- [x] Generación e impresión de tickets térmicos (mike42/escpos-php)
+- [x] Módulo Proveedores (CRUD + relación con productos)
 - [ ] Reportes (pendiente)

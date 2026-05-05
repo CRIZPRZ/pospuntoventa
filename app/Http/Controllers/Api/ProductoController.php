@@ -18,7 +18,7 @@ class ProductoController extends Controller
 
     public function index(Request $request)
     {
-        $query = Producto::with(['categoria', 'mercadoLibre'])->latest();
+        $query = Producto::with(['categoria', 'proveedor', 'mercadoLibre'])->latest();
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -44,21 +44,21 @@ class ProductoController extends Controller
     public function store(Request $request)
     {
         $data = $this->validated($request);
-        $producto = Producto::create($data)->load(['categoria', 'mercadoLibre']);
+        $producto = Producto::create($data)->load(['categoria', 'proveedor', 'mercadoLibre']);
 
         return response()->json($producto, 201);
     }
 
     public function show(Producto $producto)
     {
-        return response()->json($producto->load(['categoria', 'mercadoLibre']));
+        return response()->json($producto->load(['categoria', 'proveedor', 'mercadoLibre']));
     }
 
     public function update(Request $request, Producto $producto)
     {
         $data = $this->validated($request, $producto);
         $producto->update($data);
-        $producto = $producto->fresh(['categoria', 'mercadoLibre']);
+        $producto = $producto->fresh(['categoria', 'proveedor', 'mercadoLibre']);
 
         if ($producto->mercadoLibre->isNotEmpty()) {
             try {
@@ -71,7 +71,7 @@ class ProductoController extends Controller
             }
         }
 
-        return response()->json($producto->fresh(['categoria', 'mercadoLibre']));
+        return response()->json($producto->fresh(['categoria', 'proveedor', 'mercadoLibre']));
     }
 
     public function destroy(Producto $producto)
@@ -102,6 +102,7 @@ class ProductoController extends Controller
             'codigo_barras' => ['nullable', 'string', 'max:255'],
             'categoria_id' => ['nullable', 'exists:categorias,id'],
             'categoria' => ['nullable', 'string', 'max:255'],
+            'proveedor_id' => ['nullable', 'exists:proveedores,id'],
             'precio' => ['required', 'numeric', 'min:0'],
             'costo' => ['nullable', 'numeric', 'min:0'],
             'stock' => ['required', 'integer', 'min:0'],

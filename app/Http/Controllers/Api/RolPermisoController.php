@@ -42,6 +42,7 @@ class RolPermisoController extends Controller
             'Categorías' => ['ver categorias', 'gestionar categorias'],
             'Ventas' => ['ver ventas', 'realizar ventas', 'cancelar ventas'],
             'Caja' => ['ver cortes', 'gestionar caja'],
+            'Cortes' => ['ver cortes', 'gestionar cortes'],
             'Clientes' => ['ver clientes', 'gestionar clientes'],
             'Abonos' => ['ver abonos', 'gestionar abonos'],
             'Reportes' => ['ver reportes'],
@@ -56,7 +57,7 @@ class RolPermisoController extends Controller
         foreach ($grupos as $grupo => $permisos) {
             foreach ($permisos as $perm) {
                 if (!in_array($perm, $existentes)) {
-                    Permission::create(['name' => $perm]);
+                    Permission::create(['name' => $perm, 'guard_name' => 'web']);
                     $nuevos[] = $perm;
                 }
             }

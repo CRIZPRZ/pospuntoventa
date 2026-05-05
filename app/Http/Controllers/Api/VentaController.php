@@ -206,6 +206,155 @@ class VentaController extends Controller
         return response()->json($venta->load(['user', 'cliente', 'items.producto', 'pagos', 'canceladoPor']));
     }
 
+    public function imprimirTermico(Request $request, Venta $venta)
+    {
+        $config = $request->validate([
+            'tipo_impresora' => ['nullable', 'string'],
+            'ancho_papel' => ['nullable', 'string'],
+            'mostrar_logo' => ['nullable', 'boolean'],
+            'copias' => ['nullable', 'integer', 'min:1'],
+        ]);
+
+        $configuracion = $this->getConfiguracion();
+        $venta->load(['user', 'cliente', 'items.producto', 'pagos']);
+
+        try {
+            $this->imprimirTicketTermico($venta, $configuracion, $config);
+            return response()->json(['message' => 'Ticket impreso correctamente']);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Error al imprimir: ' . $e->getMessage()], 500);
+        }
+    }
+
+    private function getConfiguracion(): array
+    {
+        return \Illuminate\Support\Facades\Cache::get('ventas_configuracion', []);
+    }
+
+    private function imprimirTicketTermico(Venta $venta, array $configuracion, array $requestConfig): void
+    {
+        $impresion = $configuracion['impresion'] ?? [];
+        $ticket = $configuracion['ticket'] ?? [];
+
+        $connector = $this->getConnector($impresion);
+        $printer = new \Mike42\Escpos\Printer($connector);
+
+        $ancho = (int) ($requestConfig['ancho_papel'] ?? $impresion['ancho_papel'] ?? 80);
+
+        // Logo
+        if (($ticket['mostrar_logo'] ?? false) && ($requestConfig['mostrar_logo'] ?? false)) {
+            $logoPath = $this->getLogoPath();
+            if ($logoPath) {
+                $logo = \Mike42\Escpos\EscposImage::load($logoPath, false);
+                $printer->graphics($logo);
+            }
+        }
+
+        // Encabezado
+        $printer->setJustification(\Mike42\Escpos\Printer::JUSTIFY_CENTER);
+        if ($ticket['mostrar_datos_negocio'] ?? true) {
+            $empresa = $configuracion['empresa'] ?? [];
+            $printer->text($empresa['nombre'] ?? 'Mi Empresa' . "\n");
+            if (!empty($empresa['rfc'])) $printer->text("RFC: {$empresa['rfc']}\n");
+            if (!empty($empresa['direccion'])) $printer->text($empresa['direccion'] . "\n");
+            if (!empty($empresa['telefono'])) $printer->text("Tel: {$empresa['telefono']}\n");
+        }
+
+        $printer->text(str_repeat('-', $ancho) . "\n");
+
+        // Folio y fecha
+        if ($ticket['mostrar_folio'] ?? true) {
+            $printer->text("Folio: {$venta->folio}\n");
+        }
+        if ($ticket['mostrar_fecha'] ?? true) {
+            $printer->text("Fecha: " . $venta->created_at->format('d/m/Y H:i:s') . "\n");
+        }
+        if ($ticket['mostrar_cajero'] ?? true) {
+            $printer->text("Cajero: " . ($venta->user->name ?? 'N/A') . "\n");
+        }
+
+        $printer->text(str_repeat('-', $ancho) . "\n");
+
+        // Items
+        foreach ($venta->items as $item) {
+            $nombre = $item->nombre_producto;
+            $cantidad = $item->cantidad;
+            $precio = number_format($item->precio_unitario, 2);
+            $subtotal = number_format($item->subtotal, 2);
+
+            $printer->text("{$cantidad}x {$nombre}\n");
+            if ($ticket['mostrar_precio_unitario'] ?? true) {
+                $printer->text("  Precio: $" . $precio . "\n");
+            }
+            if ($ticket['mostrar_subtotal_linea'] ?? true) {
+                $printer->text("  Subtotal: $" . $subtotal . "\n");
+            }
+        }
+
+        $printer->text(str_repeat('-', $ancho) . "\n");
+
+        // Totales
+        if ($ticket['mostrar_subtotal'] ?? true) {
+            $printer->text("Subtotal: $" . number_format($venta->subtotal, 2) . "\n");
+        }
+        if ($ticket['mostrar_descuento'] ?? true && $venta->descuento > 0) {
+            $printer->text("Descuento: $" . number_format($venta->descuento, 2) . "\n");
+        }
+        if ($ticket['mostrar_iva'] ?? true && $venta->impuesto > 0) {
+            $printer->text("IVA: $" . number_format($venta->impuesto, 2) . "\n");
+        }
+        $printer->text("TOTAL: $" . number_format($venta->total, 2) . "\n");
+
+        // Pagos
+        if ($ticket['mostrar_metodo_pago'] ?? true) {
+            foreach ($venta->pagos as $pago) {
+                $printer->text("Pago ({$pago->metodo}): $" . number_format($pago->monto, 2) . "\n");
+                if ($ticket['mostrar_cambio'] ?? true && $pago->cambio > 0) {
+                    $printer->text("Cambio: $" . number_format($pago->cambio, 2) . "\n");
+                }
+            }
+        }
+
+        // Cliente
+        if ($venta->cliente) {
+            $printer->text("Cliente: {$venta->cliente->nombre}\n");
+        }
+
+        $printer->text(str_repeat('-', $ancho) . "\n");
+        $printer->setJustification(\Mike42\Escpos\Printer::JUSTIFY_CENTER);
+        $printer->text($ticket['pie_ticket'] ?? ($impresion['pie_ticket'] ?? 'Gracias por su compra') . "\n");
+
+        $printer->cut();
+        $printer->close();
+    }
+
+    private function getConnector(array $impresion): \Mike42\Escpos\PrintConnectors\PrintConnector
+    {
+        $conexion = $impresion['conexion_tipo'] ?? 'red';
+        $ip = $impresion['impresora_ip'] ?? '192.168.1.100';
+        $puerto = $impresion['impresora_puerto'] ?? '9100';
+        $nombre = $impresion['impresora_nombre'] ?? 'Impresora';
+        $dispositivo = $impresion['dispositivo_usb'] ?? '/dev/usb/lp0';
+
+        return match ($conexion) {
+            'red' => new \Mike42\Escpos\PrintConnectors\NetworkPrintConnector($ip, (int) $puerto),
+            'usb' => new \Mike42\Escpos\PrintConnectors\FilePrintConnector($dispositivo),
+            'windows' => new \Mike42\Escpos\PrintConnectors\WindowsPrintConnector($nombre),
+            default => new \Mike42\Escpos\PrintConnectors\NetworkPrintConnector($ip, (int) $puerto),
+        };
+    }
+
+    private function getLogoPath(): ?string
+    {
+        $files = \Illuminate\Support\Facades\Storage::disk('public')->files('config');
+        foreach ($files as $file) {
+            if (str_starts_with(basename($file), 'logo_')) {
+                return storage_path('app/public/' . $file);
+            }
+        }
+        return null;
+    }
+
     private function actualizarCaja(Caja $caja, string $tipoPago, float $total): void
     {
         $campo = match ($tipoPago) {
