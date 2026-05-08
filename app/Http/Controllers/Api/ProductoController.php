@@ -104,7 +104,7 @@ class ProductoController extends Controller
             'categoria' => ['nullable', 'string', 'max:255'],
             'proveedor_id' => ['nullable', 'exists:proveedores,id'],
             'precio' => ['required', 'numeric', 'min:0'],
-            'costo' => ['nullable', 'numeric', 'min:0'],
+            'precio_compra' => ['nullable', 'numeric', 'min:0'],
             'stock' => ['required', 'integer', 'min:0'],
             'stock_minimo' => ['nullable', 'integer', 'min:0'],
             'unidad' => ['nullable', 'string', 'max:50'],
@@ -141,5 +141,61 @@ class ProductoController extends Controller
         unset($data['categoria']);
 
         return $data;
+    }
+
+    public function imprimirEtiqueta(Request $request, Producto $producto)
+    {
+        $request->validate([
+            'cantidad' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        $cantidad = (int) ($request->input('cantidad', 1));
+        $configuracion = \Illuminate\Support\Facades\Cache::get('ventas_configuracion', []);
+        $impresion = $configuracion['impresion'] ?? [];
+
+        $barcode = $producto->codigo_barras ?: 'PROD-' . str_pad($producto->id, 6, '0', STR_PAD_LEFT);
+        $precio = number_format($producto->precio ?? 0, 2);
+
+        try {
+            $conexion = $impresion['conexion_tipo'] ?? 'red';
+            $ip = $impresion['impresora_ip'] ?? '192.168.1.100';
+            $puerto = (int) ($impresion['impresora_puerto'] ?? 9100);
+            $dispositivo = $impresion['dispositivo_usb'] ?? '/dev/usb/lp0';
+            $nombre = $impresion['impresora_nombre'] ?? 'Impresora';
+
+            $connector = match ($conexion) {
+                'red' => new \Mike42\Escpos\PrintConnectors\NetworkPrintConnector($ip, $puerto),
+                'usb' => new \Mike42\Escpos\PrintConnectors\FilePrintConnector($dispositivo),
+                'windows' => new \Mike42\Escpos\PrintConnectors\WindowsPrintConnector($nombre),
+                default => new \Mike42\Escpos\PrintConnectors\NetworkPrintConnector($ip, $puerto),
+            };
+
+            $printer = new \Mike42\Escpos\Printer($connector);
+
+            for ($i = 0; $i < $cantidad; $i++) {
+                $printer->setJustification(\Mike42\Escpos\Printer::JUSTIFY_CENTER);
+                $printer->setEmphasis(true);
+                $printer->text(mb_substr($producto->nombre, 0, 24) . "\n");
+                $printer->setEmphasis(false);
+
+                $printer->setBarcodeHeight(60);
+                $printer->setBarcodeTextPosition(\Mike42\Escpos\Printer::BARCODE_TEXT_BELOW);
+                $printer->barcode($barcode, \Mike42\Escpos\Printer::BARCODE_CODE128);
+
+                $printer->text("\n");
+                $printer->setEmphasis(true);
+                $printer->text('$' . $precio . "\n");
+                $printer->setEmphasis(false);
+
+                $printer->feed(2);
+                $printer->cut();
+            }
+
+            $printer->close();
+
+            return response()->json(['message' => 'Etiqueta impresa correctamente']);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Error al imprimir: ' . $e->getMessage()], 500);
+        }
     }
 }

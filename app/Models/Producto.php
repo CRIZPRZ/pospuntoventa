@@ -13,17 +13,23 @@ class Producto extends Model
 
     protected $fillable = [
         'categoria_id', 'proveedor_id', 'nombre', 'descripcion', 'codigo', 'codigo_barras',
-        'precio', 'costo', 'stock', 'stock_minimo', 'unidad', 'imagen', 'imagenes',
+        'precio', 'precio_compra', 'stock', 'stock_minimo', 'unidad', 'imagen', 'imagenes',
         'activo', 'disponible_ml', 'control_stock',
     ];
 
     protected $casts = [
         'precio' => 'decimal:2',
-        'costo' => 'decimal:2',
+        'precio_compra' => 'decimal:2',
         'imagenes' => 'array',
         'activo' => 'boolean',
         'control_stock' => 'boolean',
     ];
+
+    // Alias backwards-compat: código que use ->costo sigue funcionando
+    public function getCostoAttribute()
+    {
+        return $this->precio_compra;
+    }
 
     public function categoria(): BelongsTo
     {

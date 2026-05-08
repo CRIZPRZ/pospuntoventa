@@ -41,6 +41,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('productos', [ProductoController::class, 'store']);
         Route::put('productos/{producto}', [ProductoController::class, 'update']);
         Route::delete('productos/{producto}', [ProductoController::class, 'destroy']);
+        Route::post('productos/{producto}/imprimir-etiqueta', [ProductoController::class, 'imprimirEtiqueta']);
     });
 
     // Categorías

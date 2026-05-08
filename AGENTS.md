@@ -30,10 +30,11 @@ make seed        # Correr seeders
 make fresh       # migrate:fresh --seed
 ```
 
-## Regla de mantenimiento de contexto
-- Mantener actualizados `CLAUDE.md` y `AGENTS.md` cuando se agregue, cambie o depure un flujo importante del proyecto.
+## Regla de mantenimiento de contexto (OBLIGATORIA)
+- **Todo cambio relevante DEBE documentarse en `CLAUDE.md` y `AGENTS.md` antes de cerrar la tarea.** Sin excepción.
 - Si el cambio afecta backend y frontend, actualizar también los archivos equivalentes en `../ventas-frontend/`.
-- Documentar decisiones operativas que evitan regresiones, especialmente integraciones externas, auth, rutas, permisos, storage, imágenes y validaciones.
+- Documentar: bug fixes con causa raíz, nuevos endpoints, cambios de arquitectura, decisiones que evitan regresiones, integraciones externas, auth, rutas, permisos, storage, imágenes, validaciones.
+- No documentar: cambios triviales de estilos, refactors internos sin impacto en otros módulos.
 
 ## Rutas API principales (prefijo /api)
 ```text
@@ -93,6 +94,19 @@ Siempre verificar que la tabla en migration y `$table` del model coincidan.
 4. Rutas agrupadas por permiso en `api.php`
 5. RolesSeeder: permisos al array global + asignar a roles
 
+## Bug resuelto: precio_compra vs costo en productos
+- Causa: migration renombró columna `costo` → `precio_compra` pero modelo/controllers seguían usando `costo`.
+- Fix modelo: `$fillable`/`$casts` usan `precio_compra`; `getCostoAttribute()` como alias.
+- Fix `ProductoController`: eliminar bloque `precio_compra→costo` mapping.
+- Fix `VentaController`: `costo_unitario => $producto->precio_compra ?? 0`.
+- Síntomas: "Unknown column 'costo'" al editar producto + "costo_unitario cannot be null" al hacer venta.
+
+## Módulo Cortes — endpoint pendiente
+- Frontend llama `POST /api/cortes/{id}/imprimir-termico` para impresión térmica por red/USB.
+- Body: `{ ancho_papel, impresora_ip, impresora_puerto, conexion_tipo, dispositivo_usb, impresora_nombre }`.
+- Implementar en `CortesController@imprimirTermico` — mismo patrón que `VentaController@imprimirTermico`.
+- `conexion_tipo === 'webusb'` nunca llega al backend (el frontend lo maneja directamente vía WebUSB API).
+
 ## Estado del proyecto
 - [x] Estructura base Laravel 13
 - [x] Docker configurado (puertos separados del proyecto salon)
@@ -104,5 +118,6 @@ Siempre verificar que la tabla en migration y `$table` del model coincidan.
 - [x] Rutas API definidas
 - [x] Controllers con lógica completa para ventas
 - [x] Generación e impresión de tickets térmicos (mike42/escpos-php)
-- [x] Módulo Proveedores (CRUD + FK en productos)
+- [x] Módulo Proveedores (CRUD + relación con productos)
 - [ ] Reportes (pendiente)
+- [ ] `POST /api/cortes/{id}/imprimir-termico` (pendiente — frontend ya lo llama)

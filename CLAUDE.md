@@ -30,10 +30,11 @@ make seed        # Correr seeders
 make fresh       # migrate:fresh --seed
 ```
 
-## Regla de mantenimiento de contexto
-- Mantener actualizados `CLAUDE.md` y `AGENTS.md` cuando se agregue, cambie o depure un flujo importante del proyecto.
+## Regla de mantenimiento de contexto (OBLIGATORIA)
+- **Todo cambio relevante DEBE documentarse en `CLAUDE.md` y `AGENTS.md` antes de cerrar la tarea.** Sin excepción.
 - Si el cambio afecta backend y frontend, actualizar también los archivos equivalentes en `../ventas-frontend/`.
-- Documentar decisiones operativas que evitan regresiones, especialmente integraciones externas, auth, rutas, permisos, storage, imágenes y validaciones.
+- Documentar: bug fixes con causa raíz, nuevos endpoints, cambios de arquitectura, decisiones que evitan regresiones, integraciones externas, auth, rutas, permisos, storage, imágenes, validaciones.
+- No documentar: cambios triviales de estilos, refactors internos sin impacto en otros módulos.
 
 ## Estructura de Base de Datos
 - **users**: Usuarios del sistema (auth)
@@ -68,7 +69,18 @@ GET/POST /ventas
 POST   /ventas/{id}/cancelar
 GET    /ventas/{id}/ticket
 POST   /ventas/{id}/imprimir-termico
+GET    /cortes/hoy?fecha&cajero_id
+POST   /cortes/generar
+GET    /cortes/{id}/ticket
+POST   /cortes/{id}/imprimir-termico   ← PENDIENTE IMPLEMENTAR (frontend ya lo llama)
 ```
+
+## Módulo Cortes — endpoint pendiente
+- Frontend llama `POST /api/cortes/{id}/imprimir-termico` para impresión térmica por red/USB (mismo patrón que `POST /ventas/{id}/imprimir-termico`).
+- Body esperado: `{ ancho_papel, impresora_ip, impresora_puerto, conexion_tipo, dispositivo_usb, impresora_nombre }`.
+- Controlador sugerido: `CortesController@imprimirTermico` — recuperar el corte guardado, construir ESC/POS con mike42/escpos-php, enviar a impresora según `conexion_tipo`.
+- Si `conexion_tipo === 'webusb'` el frontend maneja el envío directamente (no llega al backend).
+- `GET /api/cortes/{id}/ticket` ya existe y retorna `{ ticket_html: '...' }` — no modificar.
 
 ## Integración Mercado Libre
 - Controlador: `app/Http/Controllers/Api/MercadoLibreController.php`.
@@ -97,6 +109,28 @@ POST   /ventas/{id}/imprimir-termico
 - `ProductoController` carga `proveedor` en todos los with(['categoria', 'proveedor', 'mercadoLibre'])
 - Permisos: `ver proveedores` (admin+supervisor), `gestionar proveedores` (admin only)
 - **IMPORTANTE**: siempre declarar `protected $table = 'proveedores'` en modelos con nombre en español cuya pluralización inglesa difiere (proveedor→proveedors, almacen→almacens, etc.)
+
+## Configuración — persistencia en archivo JSON
+- `Cache::forever()` solo guarda en Redis. Redis se limpia al reiniciar contenedor → config se pierde.
+- Fix: `ConfiguracionController::update()` escribe `storage/app/configuracion.json` además del cache.
+- `configuracion()` lee el archivo primero; Redis y defaults son fallback.
+- Archivo `storage/app/configuracion.json` es la fuente de verdad — NO eliminar en deploys.
+- Logo sigue en `storage/app/public/config/` (Storage disk public).
+
+## Cortes — ventas por proveedor, num_ventas, y totales por método de pago
+- `ventas_departamento` en response agrupa por proveedor via JOIN: `venta_items → productos → proveedores`.
+- Columna usada: `proveedores.nombre`. Items sin proveedor muestran "SIN PROVEEDOR".
+- Response incluye `num_ventas` = count de ventas del día filtradas.
+- El campo `codigo_departamento` en `ventas` NO existe y NO se usa — el agrupamiento es por proveedor.
+- **Totales por método**: se suman desde la tabla `pagos` (JOIN con ventas), NO desde `ventas.tipo_pago`. Razón: `ventas.tipo_pago` en colección PHP puede tener conflictos; la tabla `pagos` es la fuente canónica y soporta pagos mixtos futuros.
+- El `leftJoin cajas` fue eliminado del query de ventas para evitar columnas duplicadas (ambas tablas tienen `estado`, `created_at`, etc.).
+
+## Columna precio_compra en productos (antes: costo)
+- Migration `2026_05_05_152208_rename_costo_to_precio_compra_in_productos_table` renombró `costo` → `precio_compra`. La columna DB se llama `precio_compra`.
+- Modelo `Producto`: `$fillable` y `$casts` usan `precio_compra`. Alias `getCostoAttribute()` devuelve `$this->precio_compra` para backwards-compat.
+- `ProductoController`: ya NO mapear `precio_compra→costo`. El campo se guarda directo como `precio_compra`.
+- `VentaController`: `costo_unitario` en venta_items → `$producto->precio_compra ?? 0`.
+- **NUNCA** volver a poner `costo` en `$fillable` de Producto — columna DB no existe.
 
 ## Patrón: nuevo módulo backend
 1. Migration con `$table->softDeletes()` si es entidad principal

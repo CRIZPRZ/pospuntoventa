@@ -29,6 +29,12 @@ class ConfiguracionController extends Controller
         ]);
 
         $configuracion = array_replace_recursive($this->configuracion(), $data);
+
+        // Persistir en archivo (sobrevive reinicios de Redis/servidor)
+        file_put_contents(
+            storage_path('app/configuracion.json'),
+            json_encode($configuracion, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
+        );
         Cache::forever(self::CACHE_KEY, $configuracion);
 
         return response()->json($configuracion);
@@ -67,6 +73,16 @@ class ConfiguracionController extends Controller
 
     private function configuracion(): array
     {
+        // Archivo JSON como fuente primaria (sobrevive reinicios de Redis)
+        $path = storage_path('app/configuracion.json');
+        if (file_exists($path)) {
+            $data = json_decode(file_get_contents($path), true);
+            if (is_array($data)) {
+                return $data;
+            }
+        }
+
+        // Fallback a cache Redis, luego a defaults
         return Cache::get(self::CACHE_KEY, [
             'empresa' => [
                 'nombre' => 'Mi Empresa',

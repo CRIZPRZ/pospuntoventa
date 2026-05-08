@@ -15,7 +15,6 @@ class CortesController extends Controller
 
         $query = DB::table('ventas')
             ->join('users', 'ventas.user_id', '=', 'users.id')
-            ->leftJoin('cajas', 'ventas.caja_id', '=', 'cajas.id')
             ->whereDate('ventas.created_at', $fecha)
             ->where('ventas.estado', '!=', 'cancelada');
 
@@ -25,20 +24,37 @@ class CortesController extends Controller
 
         $ventas = $query->select(
             'ventas.*',
-            'users.name as cajero_nombre',
-            'cajas.fondo_inicial'
+            'users.name as cajero_nombre'
         )->get();
 
-        $totalEfectivo = $ventas->where('tipo_pago', 'efectivo')->sum('total');
-        $totalTarjeta  = $ventas->where('tipo_pago', 'tarjeta')->sum('total');
-        $totalCredito  = $ventas->where('tipo_pago', 'credito')->sum('total');
+        // Sumar desde pagos por metodo — más preciso que ventas.tipo_pago,
+        // soporta pagos mixtos y evita problemas de coincidencia de strings en colección.
+        $pagosQuery = DB::table('pagos')
+            ->join('ventas as vp', 'vp.id', '=', 'pagos.venta_id')
+            ->whereDate('vp.created_at', $fecha)
+            ->where('vp.estado', '!=', 'cancelada');
 
-        $caja = DB::table('cajas')
-            ->whereDate('created_at', $fecha)
-            ->where('estado', 'abierta')
-            ->first();
+        if ($cajeroId) {
+            $pagosQuery->where('vp.user_id', $cajeroId);
+        }
 
-        $fondoInicial = $caja ? $caja->fondo_inicial : 0;
+        $pagosPorMetodo = $pagosQuery
+            ->select('pagos.metodo', DB::raw('SUM(pagos.monto) as total'))
+            ->groupBy('pagos.metodo')
+            ->pluck('total', 'metodo');
+
+        $totalEfectivo = (float) ($pagosPorMetodo['efectivo'] ?? 0);
+        $totalTarjeta  = (float) ($pagosPorMetodo['tarjeta'] ?? 0);
+        $totalCredito  = (float) ($pagosPorMetodo['credito'] ?? 0);
+
+        // Buscar caja del día sin filtrar por estado — puede estar cerrada al hacer el corte
+        $cajaQuery = DB::table('cajas')->whereDate('abierta_at', $fecha);
+        if ($cajeroId) {
+            $cajaQuery->where('user_id', $cajeroId);
+        }
+        $caja = $cajaQuery->latest('abierta_at')->first();
+
+        $fondoInicial = $caja ? (float) $caja->fondo_inicial : 0;
 
         // Pagos de clientes (abonos) del día
         $pagosClientes = DB::table('abonos')
@@ -53,13 +69,27 @@ class CortesController extends Controller
                 ->sum('monto');
         }
 
-        $ventasPorDepto = $ventas->groupBy('codigo_departamento')
-            ->map(function ($items, $codigo) {
-                return [
-                    'codigo' => $codigo ?? 'SIN-DEPTO',
-                    'monto'  => $items->sum('total'),
-                ];
-            })->values();
+        // Ventas agrupadas por proveedor (join venta_items → productos → proveedores)
+        $ventasPorProveedorQuery = DB::table('venta_items')
+            ->join('ventas as v2', 'v2.id', '=', 'venta_items.venta_id')
+            ->join('productos', 'productos.id', '=', 'venta_items.producto_id')
+            ->leftJoin('proveedores', 'proveedores.id', '=', 'productos.proveedor_id')
+            ->whereDate('v2.created_at', $fecha)
+            ->where('v2.estado', '!=', 'cancelada');
+
+        if ($cajeroId) {
+            $ventasPorProveedorQuery->where('v2.user_id', $cajeroId);
+        }
+
+        $ventasPorDepto = $ventasPorProveedorQuery
+            ->select(
+                DB::raw('COALESCE(proveedores.nombre, "SIN PROVEEDOR") as nombre'),
+                DB::raw('SUM(venta_items.subtotal) as monto')
+            )
+            ->groupBy('proveedores.id', 'proveedores.nombre')
+            ->get()
+            ->map(fn($row) => ['nombre' => $row->nombre, 'monto' => $row->monto])
+            ->values();
 
         $cajeroNombre = $cajeroId
             ? ($ventas->first()->cajero_nombre ?? 'N/A')
@@ -68,10 +98,11 @@ class CortesController extends Controller
         $totalDineroCaja = $fondoInicial + $totalEfectivo + $pagosClientes - $pagosProveedores;
 
         return response()->json([
-            'id'     => null,
-            'fecha'  => $fecha,
-            'hora'   => now()->format('h:i A'),
-            'cajero' => $cajeroNombre,
+            'id'         => null,
+            'fecha'      => $fecha,
+            'hora'       => now()->format('h:i A'),
+            'num_ventas' => $ventas->count(),
+            'cajero'     => $cajeroNombre,
             'caja'   => $caja->nombre ?? 'Caja Principal',
             'entradas_efectivo' => [
                 'inicio_caja'    => $fondoInicial,
