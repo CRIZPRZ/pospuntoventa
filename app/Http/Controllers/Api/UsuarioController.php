@@ -23,7 +23,8 @@ class UsuarioController extends Controller
         }
 
         return response()->json(
-            $query->paginate($request->integer('per_page', 50))->through(fn (User $user) => $this->formatUser($user))
+            $query->paginate($request->integer('per_page', 50))
+                  ->through(fn (User $user) => $this->formatUser($user))
         );
     }
 
@@ -34,44 +35,53 @@ class UsuarioController extends Controller
 
     public function store(Request $request)
     {
-        $roles = Role::pluck('name')->toArray();
+        $tenantId = app('tenant_id');
+
+        // Only show roles belonging to this tenant
+        $roles = Role::where('empresa_id', $tenantId)->pluck('name')->toArray();
 
         $data = $request->validate([
-            'nombre' => ['required_without:name', 'string', 'max:255'],
-            'name' => ['required_without:nombre', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'nombre'   => ['required_without:name', 'string', 'max:255'],
+            'name'     => ['required_without:nombre', 'string', 'max:255'],
+            'email'    => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:6'],
-            'rol' => ['required', Rule::in($roles)],
+            'rol'      => ['required', Rule::in($roles)],
         ]);
 
         $user = User::create([
-            'name' => $data['name'] ?? $data['nombre'],
-            'email' => $data['email'],
-            'password' => $data['password'],
+            'name'       => $data['name'] ?? $data['nombre'],
+            'email'      => $data['email'],
+            'password'   => $data['password'],
+            'empresa_id' => $tenantId,
         ]);
-        $user->assignRole($data['rol']);
+
+        $role = Role::where('empresa_id', $tenantId)->where('name', $data['rol'])->first();
+        $user->assignRole($role);
 
         return response()->json($this->formatUser($user->load('roles')), 201);
     }
 
     public function update(Request $request, User $usuario)
     {
-        $roles = Role::pluck('name')->toArray();
+        $tenantId = app('tenant_id');
+        $roles    = Role::where('empresa_id', $tenantId)->pluck('name')->toArray();
 
         $data = $request->validate([
-            'nombre' => ['required_without:name', 'string', 'max:255'],
-            'name' => ['required_without:nombre', 'string', 'max:255'],
-            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($usuario)],
+            'nombre'   => ['required_without:name', 'string', 'max:255'],
+            'name'     => ['required_without:nombre', 'string', 'max:255'],
+            'email'    => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($usuario)],
             'password' => ['nullable', 'string', 'min:6'],
-            'rol' => ['required', Rule::in($roles)],
+            'rol'      => ['required', Rule::in($roles)],
         ]);
 
         $usuario->update(array_filter([
-            'name' => $data['name'] ?? $data['nombre'],
-            'email' => $data['email'],
+            'name'     => $data['name'] ?? $data['nombre'],
+            'email'    => $data['email'],
             'password' => $data['password'] ?? null,
         ], fn ($value) => $value !== null && $value !== ''));
-        $usuario->syncRoles([$data['rol']]);
+
+        $role = Role::where('empresa_id', $tenantId)->where('name', $data['rol'])->first();
+        $usuario->syncRoles([$role]);
 
         return response()->json($this->formatUser($usuario->fresh('roles')));
     }
@@ -91,20 +101,20 @@ class UsuarioController extends Controller
     {
         return response()->json([
             'message' => 'El backend actual no maneja estado activo/inactivo de usuarios',
-            'user' => $this->formatUser($usuario->load('roles')),
+            'user'    => $this->formatUser($usuario->load('roles')),
         ]);
     }
 
     private function formatUser(User $user): array
     {
         return [
-            'id' => $user->id,
-            'name' => $user->name,
-            'nombre' => $user->name,
-            'email' => $user->email,
-            'rol' => $user->roles->first()?->name ?? 'cajero',
-            'roles' => $user->roles->pluck('name')->values(),
-            'activo' => true,
+            'id'         => $user->id,
+            'name'       => $user->name,
+            'nombre'     => $user->name,
+            'email'      => $user->email,
+            'rol'        => $user->roles->first()?->name ?? 'sin rol',
+            'roles'      => $user->roles->pluck('name')->values(),
+            'activo'     => true,
             'created_at' => $user->created_at,
             'updated_at' => $user->updated_at,
         ];

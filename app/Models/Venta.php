@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,17 +13,39 @@ class Venta extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'folio', 'user_id', 'caja_id', 'cliente_id',
+        'empresa_id', 'folio', 'user_id', 'caja_id', 'cliente_id',
         'subtotal', 'descuento', 'impuesto', 'total',
         'tipo_pago', 'estado', 'cancelada_por', 'notas',
     ];
 
     protected $casts = [
-        'subtotal' => 'decimal:2',
+        'subtotal'  => 'decimal:2',
         'descuento' => 'decimal:2',
-        'impuesto' => 'decimal:2',
-        'total' => 'decimal:2',
+        'impuesto'  => 'decimal:2',
+        'total'     => 'decimal:2',
     ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope('tenant', function (Builder $builder) {
+            if (app()->bound('tenant_id')) {
+                $builder->where('empresa_id', app('tenant_id'));
+            }
+        });
+
+        static::creating(function (self $model) {
+            if (!$model->empresa_id && app()->bound('tenant_id')) {
+                $model->empresa_id = app('tenant_id');
+            }
+            // Folio único por empresa
+            $empresaId = $model->empresa_id;
+            $count = static::withoutGlobalScope('tenant')
+                ->withTrashed()
+                ->where('empresa_id', $empresaId)
+                ->count();
+            $model->folio = 'V-' . str_pad($count + 1, 6, '0', STR_PAD_LEFT);
+        });
+    }
 
     public function user(): BelongsTo
     {
@@ -57,12 +80,5 @@ class Venta extends Model
     public function abonos(): HasMany
     {
         return $this->hasMany(Abono::class);
-    }
-
-    protected static function booted(): void
-    {
-        static::creating(function (Venta $venta) {
-            $venta->folio = 'V-' . str_pad(static::withTrashed()->count() + 1, 6, '0', STR_PAD_LEFT);
-        });
     }
 }

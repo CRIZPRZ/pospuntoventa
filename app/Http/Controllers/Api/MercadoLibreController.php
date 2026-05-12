@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Producto;
 use App\Models\ProductoMeli;
+use App\Models\ProductoMeliKit;
 use App\Services\MercadoLibreService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -32,18 +33,22 @@ class MercadoLibreController extends Controller
             ]);
         }
 
+        $sandboxMode = $config->sandbox_mode ?? false;
+
         return response()->json([
-            'connected' => $config->active,
+            'connected' => $sandboxMode ? (bool) $config->test_access_token : $config->active,
             'client_id' => $config->client_id,
             'site_id' => $config->site_id,
             'seller_id' => $config->seller_id,
             'seller_name' => $config->seller_name,
             'token_expires_at' => $config->token_expires_at,
             'token_valid' => $config->hasValidToken(),
+            'test_token_valid' => $config->hasValidTestToken(),
+            'test_token_expires_at' => $config->test_token_expires_at,
             'auto_sync_stock' => $config->auto_sync_stock,
             'auto_publish' => $config->auto_publish,
             'callback_url' => $config->callback_url,
-            'sandbox_mode' => $config->sandbox_mode ?? false,
+            'sandbox_mode' => $sandboxMode,
             'test_user' => $config->test_user,
             'total_published' => ProductoMeli::where('status', 'active')->count(),
         ]);
@@ -113,9 +118,17 @@ class MercadoLibreController extends Controller
 
     public function disconnect()
     {
-        $config = \App\Models\MercadoLibreConfig::getActive();
+        $config = \App\Models\MercadoLibreConfig::first();
         if ($config) {
-            $config->update(['active' => false, 'access_token' => null, 'refresh_token' => null]);
+            if ($config->sandbox_mode) {
+                $config->update([
+                    'test_access_token' => null,
+                    'test_refresh_token' => null,
+                    'test_token_expires_at' => null,
+                ]);
+            } else {
+                $config->update(['active' => false, 'access_token' => null, 'refresh_token' => null]);
+            }
         }
 
         return response()->json(['message' => 'Desconectado de Mercado Libre']);
@@ -467,24 +480,17 @@ class MercadoLibreController extends Controller
 
     public function createTestUser()
     {
-        if (!$this->meliService->isConnected()) {
-            return response()->json(['message' => 'Debes estar conectado para crear usuarios de prueba'], 400);
-        }
-
         $config = \App\Models\MercadoLibreConfig::first();
 
-        // If we already have a test user saved, return it
-        if ($config && $config->test_user && isset($config->test_user['nickname'], $config->test_user['password'])) {
-            return response()->json([
-                'message' => 'Ya tienes un usuario de prueba creado',
-                'test_user' => $config->test_user,
-            ]);
+        // Requires real account token (not sandbox token) to create test users
+        if (!$config || !$config->access_token) {
+            return response()->json(['message' => 'Debes conectar tu cuenta real de Mercado Libre primero'], 400);
         }
 
         try {
             $testUser = $this->meliService->createTestUser();
 
-            $config->update(['sandbox_mode' => true, 'test_user' => $testUser]);
+            $config->update(['test_user' => $testUser]);
 
             return response()->json([
                 'message' => 'Usuario de prueba creado',
@@ -536,5 +542,91 @@ class MercadoLibreController extends Controller
         $config->update(['test_user' => null]);
 
         return response()->json(['message' => 'Usuario de prueba eliminado del registro local']);
+    }
+
+    public function misPublicaciones(Request $request)
+    {
+        if (!$this->meliService->isConnected()) {
+            return response()->json(['message' => 'No conectado a Mercado Libre'], 400);
+        }
+
+        $offset = (int) $request->get('offset', 0);
+        $limit = (int) $request->get('limit', 50);
+
+        try {
+            $data = $this->meliService->getMisPublicaciones($offset, $limit);
+            return response()->json($data);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 400);
+        }
+    }
+
+    public function importarProductos(Request $request)
+    {
+        if (!$this->meliService->isConnected()) {
+            return response()->json(['message' => 'No conectado a Mercado Libre'], 400);
+        }
+
+        $data = $request->validate([
+            'meli_item_ids' => 'required|array|min:1',
+            'meli_item_ids.*' => 'required|string',
+        ]);
+
+        try {
+            $result = $this->meliService->importarProductos($data['meli_item_ids']);
+            return response()->json([
+                'message' => count($result['importados']) . ' producto(s) importados',
+                'importados' => $result['importados'],
+                'errores' => $result['errores'],
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 400);
+        }
+    }
+
+    // ==================== Kits ====================
+
+    public function getKitComponentes(ProductoMeli $productoMeli)
+    {
+        $componentes = $productoMeli->kits()->with('producto:id,nombre,stock,precio')->get()
+            ->map(fn($k) => [
+                'id' => $k->id,
+                'producto_id' => $k->producto_id,
+                'nombre' => $k->producto?->nombre,
+                'stock' => $k->producto?->stock,
+                'precio' => $k->producto?->precio,
+                'cantidad' => $k->cantidad,
+            ]);
+
+        return response()->json([
+            'es_kit' => $productoMeli->esKit(),
+            'stock_disponible' => $productoMeli->stockDisponible(),
+            'componentes' => $componentes,
+        ]);
+    }
+
+    public function setKitComponentes(Request $request, ProductoMeli $productoMeli)
+    {
+        $data = $request->validate([
+            'componentes' => 'required|array|min:1',
+            'componentes.*.producto_id' => 'required|integer|exists:productos,id',
+            'componentes.*.cantidad' => 'required|integer|min:1',
+        ]);
+
+        try {
+            $this->meliService->setKitComponentes($productoMeli, $data['componentes']);
+            return response()->json([
+                'message' => 'Kit actualizado',
+                'stock_disponible' => $productoMeli->fresh()->stockDisponible(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 400);
+        }
+    }
+
+    public function deleteKitComponentes(ProductoMeli $productoMeli)
+    {
+        $productoMeli->kits()->delete();
+        return response()->json(['message' => 'Kit eliminado']);
     }
 }

@@ -111,24 +111,31 @@ class ProductoController extends Controller
             'imagen' => ['nullable', 'string', 'max:255'],
             'imagenes' => ['nullable', 'array', 'max:8'],
             'imagenes.*' => ['image', 'max:4096', 'dimensions:min_width=500,min_height=500'],
+            'imagenes_mantener' => ['nullable', 'array'],
+            'imagenes_mantener.*' => ['nullable', 'string'],
             'activo' => ['nullable', 'boolean'],
             'disponible_ml' => ['nullable', 'boolean'],
             'control_stock' => ['nullable', 'boolean'],
         ]);
 
-        if ($request->hasFile('imagenes')) {
-            $imagenes = collect($producto?->imagenes ?? [])
-                ->filter()
-                ->values()
-                ->all();
+        if ($request->hasFile('imagenes') || $request->has('imagenes_mantener')) {
+            // Base: images to keep (if imagenes_mantener sent, use that; otherwise keep all existing)
+            $base = $request->has('imagenes_mantener')
+                ? collect($request->input('imagenes_mantener', []))->filter()->values()->all()
+                : collect($producto?->imagenes ?? [])->filter()->values()->all();
 
-            foreach ($request->file('imagenes') as $imagen) {
-                $imagenes[] = $imagen->store('productos', 'public');
+            // Append new uploaded files
+            if ($request->hasFile('imagenes')) {
+                foreach ($request->file('imagenes') as $imagen) {
+                    $base[] = $imagen->store('productos', 'public');
+                }
             }
 
-            $data['imagenes'] = array_values(array_slice($imagenes, 0, 8));
-            $data['imagen'] = $data['imagen'] ?? ($data['imagenes'][0] ?? null);
+            $data['imagenes'] = array_values(array_slice($base, 0, 8));
+            $data['imagen'] = $data['imagenes'][0] ?? $data['imagen'] ?? null;
         }
+
+        unset($data['imagenes_mantener']);
 
         if (! empty($data['categoria']) && empty($data['categoria_id'])) {
             $categoria = Categoria::firstOrCreate(

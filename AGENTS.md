@@ -1,7 +1,36 @@
 # Ventas POS — Contexto del Proyecto (Backend Laravel)
 
 ## Descripción
-Sistema de Punto de Venta (POS) completo para gestión de ventas de cualquier tipo de productos.
+Sistema de Punto de Venta (POS) completo **multi-tenant**. Cada negocio es una `empresa`; todos los datos están aislados por `empresa_id`.
+
+## Multi-tenant Architecture
+- **Tabla**: `empresas` (`id, nombre, slug, email, status`)
+- **Columna**: `empresa_id` en todas las tablas de datos: `users, productos, categorias, clientes, ventas, cajas, abonos, proveedores, pagos_proveedores, mercado_libre_config, cotizaciones`
+- **Roles**: `empresa_id` en tabla `roles`. Unique por `(name, guard_name, empresa_id)`. Cada tenant tiene sus propios roles.
+- **Rol admin**: sagrado — no se puede eliminar. Se crea automáticamente al registrar empresa.
+- **Permissions**: globales (sin empresa_id). Seeder los crea una vez.
+- **Middleware**: `ResolveTenant` (appended a grupo `api`) — lee `user.empresa_id` y hace `app()->instance('tenant_id', id)`.
+- **Global Scopes**: en todos los modelos de datos. Filtra por `empresa_id` cuando `app()->bound('tenant_id')`.
+- **Auto-set empresa_id**: modelos tienen evento `creating` que pone `empresa_id = app('tenant_id')` automáticamente.
+- **Registro**: `POST /api/register` (público) — crea empresa + admin role (todos los permisos) + user admin → devuelve token.
+- **Login/Me**: response incluye `empresa: { id, nombre, slug }`.
+- **Configuración**: archivo por tenant `storage/app/configuracion_{empresa_id}.json`, cache key `ventas_configuracion_{empresa_id}`, logo en `storage/app/public/config/{empresa_id}/`.
+- **MercadoLibreService**: constructor tiene try/catch para no fallar si tabla no existe (ej. durante migrate:fresh).
+- **Folio ventas**: unique por `(empresa_id, folio)`. Se genera con `withoutGlobalScope('tenant')` filtrando por empresa.
+
+### Archivos clave del tenant
+- `app/Models/Empresa.php` — modelo tenant
+- `app/Http/Middleware/ResolveTenant.php` — middleware
+- `app/Http/Controllers/Api/RegisterController.php` — registro público
+- `database/migrations/2026_05_11_000001_create_empresas_table.php`
+- `database/migrations/2026_05_11_000002_add_empresa_id_to_tables.php`
+- `database/migrations/2026_05_11_000003_add_empresa_id_to_roles_table.php`
+
+### Reglas críticas para código nuevo
+- Todo modelo nuevo que sea datos de un negocio: agregar `empresa_id` en fillable + global scope + creating event (copiar patrón de Producto.php).
+- Al crear usuarios en UsuarioController: el rol se busca por `empresa_id` y `name` (no solo por name).
+- No usar `Role::pluck('name')` sin filtrar por empresa_id.
+- Ruta de registro NO debe estar dentro del grupo `auth:sanctum`.
 
 ## Stack
 - **Framework**: Laravel 13 (PHP 8.3)
@@ -35,6 +64,16 @@ make fresh       # migrate:fresh --seed
 - Si el cambio afecta backend y frontend, actualizar también los archivos equivalentes en `../ventas-frontend/`.
 - Documentar: bug fixes con causa raíz, nuevos endpoints, cambios de arquitectura, decisiones que evitan regresiones, integraciones externas, auth, rutas, permisos, storage, imágenes, validaciones.
 - No documentar: cambios triviales de estilos, refactors internos sin impacto en otros módulos.
+
+## Módulo Pedidos
+- Tabla `pedidos`: `empresa_id, folio (PED-XXXX), cotizacion_id, cliente_id, nombre_cliente, email_cliente, vendedor_id, fecha, fecha_entrega, status, subtotal, descuento, impuesto_pct, total, notas, softDeletes`
+- Tabla `pedido_items`: `pedido_id, producto_id, descripcion, cantidad, precio_unitario, descuento, subtotal`
+- Tabla `cotizaciones` tiene `pedido_id` para rastrear la conversión
+- Status: `pendiente | confirmado | en_proceso | enviado | entregado | cancelado`
+- No se puede eliminar en status `enviado` o `entregado`
+- No se puede editar en status `entregado`
+- Permisos: `ver pedidos`, `gestionar pedidos`
+- `POST /cotizaciones/{id}/convertir-pedido` → crea Pedido desde Cotización, marca `cotizacion.pedido_id`
 
 ## Rutas API principales (prefijo /api)
 ```text
@@ -71,9 +110,9 @@ POST   /ventas/{id}/imprimir-termico
 - Al editar un producto ya publicado, `ProductoController@update` intenta sincronizar datos editables con Mercado Libre mediante `MercadoLibreService::syncProductData`: precio, stock y fotos.
 - `productInfo()` consulta el item vivo en ML, actualiza status local y devuelve `sub_status` para explicar pausas/revisión en frontend.
 
-## Credenciales de prueba (después del seed)
-- Admin: admin@ventas.com / password
-- Cajero: cajero@ventas.com / password
+## Credenciales de prueba
+- No hay usuarios pre-seeded. Registrar empresa en `POST /api/register` o desde `/register` en el frontend.
+- El seeder solo crea los permisos globales (no roles ni usuarios).
 
 ## Módulo Proveedores
 - `app/Models/Proveedor.php`: `$table = 'proveedores'` OBLIGATORIO (sin esto Laravel busca "proveedors")

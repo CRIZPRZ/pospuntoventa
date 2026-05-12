@@ -10,24 +10,20 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         $credentials = $request->validate([
-            'email' => 'required|email',
+            'email'    => 'required|email',
             'password' => 'required',
         ]);
 
-        if (! auth()->attempt($credentials)) {
+        if (!auth()->attempt($credentials)) {
             return response()->json(['message' => 'Credenciales incorrectas'], 401);
         }
 
-        $user = auth()->user();
-        $user->load('roles', 'permissions');
+        $user = auth()->user()->load('roles', 'permissions', 'empresa');
         $token = $user->createToken('ventas-pos')->plainTextToken;
 
         return response()->json([
             'token' => $token,
-            'user' => array_merge($user->toArray(), [
-                'roles' => $user->getRoleNames(),
-                'permissions' => $user->getAllPermissions()->pluck('name'),
-            ]),
+            'user'  => $this->formatUser($user),
         ]);
     }
 
@@ -39,12 +35,16 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        $user = $request->user()->load('roles', 'permissions');
-        return response()->json([
-            'user' => array_merge($user->toArray(), [
-                'roles' => $user->getRoleNames(),
-                'permissions' => $user->getAllPermissions()->pluck('name'),
-            ]),
+        $user = $request->user()->load('roles', 'permissions', 'empresa');
+        return response()->json(['user' => $this->formatUser($user)]);
+    }
+
+    private function formatUser($user): array
+    {
+        return array_merge($user->toArray(), [
+            'roles'       => $user->getRoleNames(),
+            'permissions' => $user->getAllPermissions()->pluck('name'),
+            'empresa'     => $user->empresa?->only(['id', 'nombre', 'slug']),
         ]);
     }
 }

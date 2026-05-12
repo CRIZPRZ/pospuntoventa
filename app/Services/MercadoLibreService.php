@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\MercadoLibreConfig;
 use App\Models\Producto;
 use App\Models\ProductoMeli;
+use App\Models\ProductoMeliKit;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -19,12 +20,30 @@ class MercadoLibreService
     public function __construct(
         protected ?MercadoLibreConfig $config = null
     ) {
-        $this->config ??= MercadoLibreConfig::first();
+        if ($this->config === null) {
+            try {
+                $this->config = MercadoLibreConfig::first();
+            } catch (\Exception) {
+                // Table may not exist during migrations
+                $this->config = null;
+            }
+        }
     }
 
     public function isConnected(): bool
     {
-        return $this->config && $this->config->active && $this->config->access_token;
+        if (!$this->config || !$this->config->active) return false;
+
+        if ($this->config->sandbox_mode) {
+            return (bool) $this->config->test_access_token;
+        }
+
+        return (bool) $this->config->access_token;
+    }
+
+    public function isTestUserConnected(): bool
+    {
+        return $this->config && (bool) $this->config->test_access_token;
     }
 
     // ==================== OAuth ====================
@@ -54,15 +73,28 @@ class MercadoLibreService
         }
 
         $data = $response->json();
-        $this->saveTokens($data);
+        $isSandbox = $this->config->sandbox_mode ?? false;
+        $this->saveTokens($data, $isSandbox);
 
-        // Get seller info
+        // Get seller info using the new token
         $seller = $this->getSellerInfo($data['access_token']);
-        $this->config->update([
-            'seller_id' => $seller['id'],
-            'seller_name' => $seller['nickname'] ?? $seller['first_name'] . ' ' . $seller['last_name'],
-            'active' => true,
-        ]);
+
+        if ($isSandbox) {
+            $this->config->update([
+                'test_user' => array_merge((array) ($this->config->test_user ?? []), [
+                    'id' => $seller['id'],
+                    'nickname' => $seller['nickname'] ?? '',
+                    'site_id' => $seller['site_id'] ?? $this->config->site_id,
+                ]),
+                'active' => true,
+            ]);
+        } else {
+            $this->config->update([
+                'seller_id' => $seller['id'],
+                'seller_name' => $seller['nickname'] ?? ($seller['first_name'] . ' ' . $seller['last_name']),
+                'active' => true,
+            ]);
+        }
 
         return [
             'access_token' => $data['access_token'],
@@ -71,41 +103,55 @@ class MercadoLibreService
             'seller_id' => $seller['id'],
             'seller_name' => $seller['nickname'],
             'site_id' => $seller['site_id'],
+            'sandbox' => $isSandbox,
         ];
     }
 
     public function refreshToken(): ?array
     {
-        if (!$this->config || !$this->config->refresh_token) {
-            return null;
-        }
+        if (!$this->config) return null;
+
+        $isSandbox = $this->config->sandbox_mode ?? false;
+        $refreshToken = $isSandbox ? $this->config->test_refresh_token : $this->config->refresh_token;
+
+        if (!$refreshToken) return null;
 
         $response = Http::asForm()->post(self::BASE_URL . '/oauth/token', [
             'grant_type' => 'refresh_token',
             'client_id' => $this->config->client_id,
             'client_secret' => $this->config->client_secret,
-            'refresh_token' => $this->config->refresh_token,
+            'refresh_token' => $refreshToken,
         ]);
 
         if ($response->failed()) {
             Log::error('ML token refresh failed: ' . $response->body());
-            $this->config->update(['active' => false]);
+            if (!$isSandbox) {
+                $this->config->update(['active' => false]);
+            }
             return null;
         }
 
         $data = $response->json();
-        $this->saveTokens($data);
+        $this->saveTokens($data, $isSandbox);
 
         return $data;
     }
 
-    protected function saveTokens(array $data): void
+    protected function saveTokens(array $data, bool $sandbox = false): void
     {
-        $this->config->update([
-            'access_token' => $data['access_token'],
-            'refresh_token' => $data['refresh_token'],
-            'token_expires_at' => now()->addSeconds($data['expires_in'] ?? self::TOKEN_TTL_SECONDS),
-        ]);
+        if ($sandbox) {
+            $this->config->update([
+                'test_access_token' => $data['access_token'],
+                'test_refresh_token' => $data['refresh_token'],
+                'test_token_expires_at' => now()->addSeconds($data['expires_in'] ?? self::TOKEN_TTL_SECONDS),
+            ]);
+        } else {
+            $this->config->update([
+                'access_token' => $data['access_token'],
+                'refresh_token' => $data['refresh_token'],
+                'token_expires_at' => now()->addSeconds($data['expires_in'] ?? self::TOKEN_TTL_SECONDS),
+            ]);
+        }
     }
 
     public function getSellerInfo(?string $token = null): array
@@ -256,6 +302,17 @@ class MercadoLibreService
             'status' => $producto->stock > 0 ? 'active' : 'paused',
             'last_sync_at' => now(),
         ]);
+
+        // Si este producto es componente de algún kit ML, actualizar también esos kits
+        $kitsConEsteProducto = ProductoMeliKit::where('producto_id', $producto->id)
+            ->with('productoMeli')
+            ->get();
+
+        foreach ($kitsConEsteProducto as $kitComponente) {
+            $pm = $kitComponente->productoMeli;
+            if (!$pm) continue;
+            $this->updateKitStock($pm);
+        }
 
         return true;
     }
@@ -493,12 +550,19 @@ class MercadoLibreService
             if (!$meliItemId || $quantity <= 0) continue;
 
             $pm = ProductoMeli::where('meli_item_id', $meliItemId)->first();
-            if (!$pm || !$pm->producto->control_stock) continue;
+            if (!$pm) continue;
 
-            $pm->producto->decrement('stock', $quantity);
-
-            // Update ML stock too (to prevent race conditions)
-            $this->updateStock($pm->producto);
+            if ($pm->esKit()) {
+                foreach ($pm->kits()->with('producto')->get() as $kitComp) {
+                    if (!$kitComp->producto || !$kitComp->producto->control_stock) continue;
+                    $kitComp->producto->decrement('stock', $quantity * $kitComp->cantidad);
+                }
+                $this->updateKitStock($pm);
+            } else {
+                if (!$pm->producto || !$pm->producto->control_stock) continue;
+                $pm->producto->decrement('stock', $quantity);
+                $this->updateStock($pm->producto);
+            }
         }
 
         return ['synced' => true, 'order_id' => $orderId];
@@ -632,6 +696,18 @@ class MercadoLibreService
 
     protected function getAccessToken(): string
     {
+        $isSandbox = $this->config->sandbox_mode ?? false;
+
+        if ($isSandbox) {
+            if ($this->config->isTestTokenExpiringSoon()) {
+                $this->refreshToken();
+            }
+            if (!$this->config->test_access_token) {
+                throw new \Exception('No hay token de usuario de prueba. Conecta el usuario de prueba desde la configuración de Mercado Libre.');
+            }
+            return $this->config->test_access_token;
+        }
+
         if ($this->config->isTokenExpiringSoon()) {
             $this->refreshToken();
         }
@@ -740,15 +816,207 @@ class MercadoLibreService
         ];
     }
 
+    // ==================== Import from ML ====================
+
+    public function getMisPublicaciones(int $offset = 0, int $limit = 50): array
+    {
+        $this->ensureToken();
+
+        $sellerId = $this->config->sandbox_mode
+            ? ($this->config->test_user['id'] ?? $this->config->seller_id)
+            : $this->config->seller_id;
+
+        if (!$sellerId) {
+            throw new \Exception('No hay seller_id configurado');
+        }
+
+        $searchResp = Http::withToken($this->getAccessToken())
+            ->get(self::BASE_URL . "/users/{$sellerId}/items/search", [
+                'limit' => $limit,
+                'offset' => $offset,
+            ]);
+
+        if ($searchResp->failed()) {
+            throw new \Exception('Error al obtener publicaciones: ' . $searchResp->body());
+        }
+
+        $searchData = $searchResp->json();
+        $itemIds = $searchData['results'] ?? [];
+        $paging = $searchData['paging'] ?? ['total' => 0, 'limit' => $limit, 'offset' => $offset];
+
+        if (empty($itemIds)) {
+            return ['items' => [], 'paging' => $paging];
+        }
+
+        $chunks = array_chunk($itemIds, 20);
+        $items = [];
+
+        foreach ($chunks as $chunk) {
+            $detailResp = Http::withToken($this->getAccessToken())
+                ->get(self::BASE_URL . '/items', ['ids' => implode(',', $chunk)]);
+
+            if ($detailResp->ok()) {
+                foreach ($detailResp->json() as $entry) {
+                    if (($entry['code'] ?? 200) === 200 && isset($entry['body'])) {
+                        $body = $entry['body'];
+                        $items[] = [
+                            'meli_item_id' => $body['id'],
+                            'title' => $body['title'],
+                            'price' => $body['price'],
+                            'currency_id' => $body['currency_id'],
+                            'available_quantity' => $body['available_quantity'] ?? 0,
+                            'status' => $body['status'],
+                            'thumbnail' => $body['thumbnail'] ?? null,
+                            'category_id' => $body['category_id'] ?? null,
+                            'condition' => $body['condition'] ?? 'new',
+                            'listing_type_id' => $body['listing_type_id'] ?? null,
+                            'permalink' => $body['permalink'] ?? null,
+                        ];
+                    }
+                }
+            }
+        }
+
+        $yaLigados = \App\Models\ProductoMeli::whereIn('meli_item_id', array_column($items, 'meli_item_id'))
+            ->with('producto:id,nombre,precio,stock')
+            ->get()
+            ->keyBy('meli_item_id');
+
+        // Cargar todos los productos sin ML para fuzzy match
+        $candidatos = Producto::whereDoesntHave('mercadoLibre')
+            ->get(['id', 'nombre', 'precio', 'stock']);
+
+        foreach ($items as &$item) {
+            $ligado = $yaLigados[$item['meli_item_id']] ?? null;
+            $item['ya_importado'] = (bool) $ligado;
+            $item['producto_id'] = $ligado?->producto_id;
+            $item['producto_existente'] = $ligado?->producto ? [
+                'id' => $ligado->producto->id,
+                'nombre' => $ligado->producto->nombre,
+            ] : null;
+
+            if (!$ligado) {
+                $titleNorm = mb_strtolower(trim($item['title']));
+                $mejorMatch = null;
+                $mejorPct = 0;
+
+                foreach ($candidatos as $candidato) {
+                    similar_text($titleNorm, mb_strtolower(trim($candidato->nombre)), $pct);
+                    if ($pct > $mejorPct && $pct >= 78) {
+                        $mejorPct = $pct;
+                        $mejorMatch = $candidato;
+                    }
+                }
+
+                $item['match_producto'] = $mejorMatch ? [
+                    'id' => $mejorMatch->id,
+                    'nombre' => $mejorMatch->nombre,
+                    'precio' => $mejorMatch->precio,
+                    'stock' => $mejorMatch->stock,
+                    'similitud' => round($mejorPct),
+                ] : null;
+                $item['accion'] = $mejorMatch ? 'ligar' : 'crear';
+            } else {
+                $item['match_producto'] = null;
+                $item['accion'] = 'ya_ligado';
+            }
+        }
+
+        return ['items' => $items, 'paging' => $paging];
+    }
+
+    public function importarProductos(array $meliItemIds): array
+    {
+        $this->ensureToken();
+
+        $importados = [];
+        $errores = [];
+
+        foreach (array_chunk($meliItemIds, 20) as $chunk) {
+            $detailResp = Http::withToken($this->getAccessToken())
+                ->get(self::BASE_URL . '/items', ['ids' => implode(',', $chunk)]);
+
+            if ($detailResp->failed()) continue;
+
+            foreach ($detailResp->json() as $entry) {
+                if (($entry['code'] ?? 200) !== 200 || !isset($entry['body'])) continue;
+
+                $body = $entry['body'];
+                $meliId = $body['id'];
+
+                if (\App\Models\ProductoMeli::where('meli_item_id', $meliId)->exists()) {
+                    $errores[] = ['id' => $meliId, 'error' => 'Ya ligado a un producto'];
+                    continue;
+                }
+
+                try {
+                    // Fuzzy match por nombre entre productos sin ML link
+                    $producto = null;
+                    $titleNorm = mb_strtolower(trim($body['title']));
+                    $mejorPct = 0;
+
+                    Producto::whereDoesntHave('mercadoLibre')
+                        ->get(['id', 'nombre'])
+                        ->each(function ($candidato) use ($titleNorm, &$producto, &$mejorPct) {
+                            similar_text($titleNorm, mb_strtolower(trim($candidato->nombre)), $pct);
+                            if ($pct > $mejorPct && $pct >= 78) {
+                                $mejorPct = $pct;
+                                $producto = $candidato->fresh();
+                            }
+                        });
+
+                    $accion = 'ligado';
+
+                    if (!$producto) {
+                        // No existe — crear nuevo
+                        $producto = Producto::create([
+                            'nombre' => $body['title'],
+                            'precio' => $body['price'],
+                            'precio_compra' => 0,
+                            'stock' => $body['available_quantity'] ?? 0,
+                            'stock_minimo' => 0,
+                            'activo' => $body['status'] === 'active',
+                            'disponible_ml' => true,
+                            'control_stock' => true,
+                            'unidad' => 'pza',
+                            'imagen' => $body['thumbnail'] ?? null,
+                        ]);
+                        $accion = 'creado';
+                    } else {
+                        // Existe — solo actualizar disponible_ml
+                        $producto->update(['disponible_ml' => true]);
+                    }
+
+                    \App\Models\ProductoMeli::create([
+                        'producto_id' => $producto->id,
+                        'meli_item_id' => $meliId,
+                        'status' => $body['status'],
+                        'listing_type_id' => $body['listing_type_id'] ?? null,
+                        'price_usd' => $body['price'],
+                        'published_at' => now(),
+                        'last_sync_at' => now(),
+                    ]);
+
+                    $importados[] = ['id' => $meliId, 'producto_id' => $producto->id, 'nombre' => $producto->nombre, 'accion' => $accion];
+                } catch (\Throwable $e) {
+                    $errores[] = ['id' => $meliId, 'error' => $e->getMessage()];
+                }
+            }
+        }
+
+        return ['importados' => $importados, 'errores' => $errores];
+    }
+
     // ==================== Sandbox / Test Users ====================
 
     public function createTestUser(): array
     {
         if (!$this->config || !$this->config->access_token) {
-            throw new \Exception('Debes estar conectado para crear usuarios de prueba');
+            throw new \Exception('Debes estar conectado con tu cuenta real para crear usuarios de prueba');
         }
 
-        $response = Http::withToken($this->getAccessToken())
+        // Always use real account token — ML requires it to create test users
+        $response = Http::withToken($this->config->access_token)
             ->asJson()
             ->post(self::BASE_URL . '/users/test_user', [
                 'site_id' => $this->config->site_id ?? 'MLM',
@@ -767,5 +1035,44 @@ class MercadoLibreService
             'site_status' => $data['site_status'] ?? 'active',
             'site_id' => $this->config->site_id ?? 'MLM',
         ];
+    }
+
+    // ==================== Kits ====================
+
+    public function updateKitStock(ProductoMeli $pm): bool
+    {
+        $this->ensureToken();
+
+        $stock = $pm->stockDisponible();
+
+        $response = Http::withToken($this->getAccessToken())
+            ->asJson()
+            ->put(self::BASE_URL . "/items/{$pm->meli_item_id}", [
+                'available_quantity' => max(0, $stock),
+            ]);
+
+        if ($response->failed()) {
+            Log::error("ML kit stock update failed for {$pm->meli_item_id}: " . $response->body());
+            return false;
+        }
+
+        $pm->update(['last_sync_at' => now()]);
+        return true;
+    }
+
+    public function setKitComponentes(ProductoMeli $pm, array $componentes): void
+    {
+        $pm->kits()->delete();
+
+        foreach ($componentes as $comp) {
+            if (empty($comp['producto_id']) || empty($comp['cantidad'])) continue;
+            ProductoMeliKit::create([
+                'producto_meli_id' => $pm->id,
+                'producto_id' => $comp['producto_id'],
+                'cantidad' => max(1, (int) $comp['cantidad']),
+            ]);
+        }
+
+        $this->updateKitStock($pm);
     }
 }

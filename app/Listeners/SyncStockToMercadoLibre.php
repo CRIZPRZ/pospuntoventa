@@ -22,7 +22,8 @@ class SyncStockToMercadoLibre
             return;
         }
 
-        if (! $config->hasValidToken()) {
+        $tokenValid = $config->sandbox_mode ? $config->hasValidTestToken() : $config->hasValidToken();
+        if (! $tokenValid) {
             Log::warning('Token de ML inválido o expirado, no se sincronizó stock');
             return;
         }

@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\AbonoController;
+use App\Http\Controllers\Api\CotizacionController;
+use App\Http\Controllers\Api\PedidoController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CajaController;
 use App\Http\Controllers\Api\CategoriaController;
@@ -9,6 +11,7 @@ use App\Http\Controllers\Api\ConfiguracionController;
 use App\Http\Controllers\Api\CortesController;
 use App\Http\Controllers\Api\MercadoLibreController;
 use App\Http\Controllers\Api\ProductoController;
+use App\Http\Controllers\Api\RegisterController;
 use App\Http\Controllers\Api\UsuarioController;
 use App\Http\Controllers\Api\VentaController;
 use App\Http\Controllers\Api\ReportesController;
@@ -16,6 +19,8 @@ use App\Http\Controllers\Api\ProveedorController;
 use App\Http\Controllers\Api\PagoProveedorController;
 use App\Http\Controllers\Api\RolPermisoController;
 use Illuminate\Support\Facades\Route;
+
+Route::post('register', [RegisterController::class, 'register']);
 
 Route::prefix('auth')->group(function () {
     Route::post('login', [AuthController::class, 'login']);
@@ -149,6 +154,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('usuarios', [UsuarioController::class, 'store']);
         Route::put('usuarios/{usuario}', [UsuarioController::class, 'update']);
         Route::patch('usuarios/{usuario}/toggle', [UsuarioController::class, 'toggle']);
+        Route::delete('usuarios/{usuario}', [UsuarioController::class, 'destroy']);
     });
 
     // Configuración
@@ -158,6 +164,33 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('configuracion', [ConfiguracionController::class, 'update']);
         Route::post('configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
         Route::delete('configuracion/logo', [ConfiguracionController::class, 'deleteLogo']);
+    });
+
+    // Cotizaciones
+    Route::middleware('can:ver cotizaciones')->group(function () {
+        Route::get('cotizaciones', [CotizacionController::class, 'index']);
+        Route::get('cotizaciones/{cotizacion}', [CotizacionController::class, 'show']);
+        Route::get('cotizaciones/{cotizacion}/ticket', [CotizacionController::class, 'ticket']);
+    });
+    Route::middleware('can:gestionar cotizaciones')->group(function () {
+        Route::post('cotizaciones', [CotizacionController::class, 'store']);
+        Route::put('cotizaciones/{cotizacion}', [CotizacionController::class, 'update']);
+        Route::delete('cotizaciones/{cotizacion}', [CotizacionController::class, 'destroy']);
+        Route::post('cotizaciones/{cotizacion}/convertir', [CotizacionController::class, 'convertir']);
+        Route::post('cotizaciones/{cotizacion}/convertir-pedido', [CotizacionController::class, 'convertirAPedido']);
+        Route::post('cotizaciones/{cotizacion}/enviar', [CotizacionController::class, 'enviar']);
+    });
+
+    // Pedidos
+    Route::middleware('can:ver pedidos')->group(function () {
+        Route::get('pedidos', [PedidoController::class, 'index']);
+        Route::get('pedidos/{pedido}', [PedidoController::class, 'show']);
+    });
+    Route::middleware('can:gestionar pedidos')->group(function () {
+        Route::post('pedidos', [PedidoController::class, 'store']);
+        Route::put('pedidos/{pedido}', [PedidoController::class, 'update']);
+        Route::patch('pedidos/{pedido}/status', [PedidoController::class, 'cambiarStatus']);
+        Route::delete('pedidos/{pedido}', [PedidoController::class, 'destroy']);
     });
 
     // Roles y permisos
@@ -194,6 +227,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('productos/{producto}/reactivate', [MercadoLibreController::class, 'reactivate']);
             Route::delete('productos/{producto}/unlink', [MercadoLibreController::class, 'unlink']);
             Route::get('productos/{producto}/info', [MercadoLibreController::class, 'productInfo']);
+            Route::get('mis-publicaciones', [MercadoLibreController::class, 'misPublicaciones']);
+            Route::post('importar', [MercadoLibreController::class, 'importarProductos']);
+            Route::get('kits/{productoMeli}', [MercadoLibreController::class, 'getKitComponentes']);
+            Route::post('kits/{productoMeli}', [MercadoLibreController::class, 'setKitComponentes']);
+            Route::delete('kits/{productoMeli}', [MercadoLibreController::class, 'deleteKitComponentes']);
         });
     });
 });

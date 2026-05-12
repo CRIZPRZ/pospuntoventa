@@ -16,7 +16,7 @@ return new class extends Migration
             $table->string('folio')->unique();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->foreignId('caja_id')->nullable()->constrained('cajas')->nullOnDelete();
-            $table->foreignId('cliente_id')->nullable()->constrained('clientes')->nullOnDelete();
+            $table->unsignedBigInteger('cliente_id')->nullable(); // FK added after clientes table in later migration
             $table->decimal('subtotal', 10, 2)->default(0);
             $table->decimal('descuento', 10, 2)->default(0);
             $table->decimal('impuesto', 10, 2)->default(0);
