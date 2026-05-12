@@ -72,7 +72,15 @@ class Producto extends Model
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
             return $path;
         }
-        return Storage::url($path);
+        // Strip any accidental /storage/ prefix before generating URL
+        $clean = ltrim(preg_replace('#^/storage/#', '', $path), '/');
+        $url = Storage::url($clean);
+        // If Storage::url returns relative (APP_URL not set), prefix manually
+        if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
+            $base = rtrim(config('app.url'), '/');
+            $url = $base . '/' . ltrim($url, '/');
+        }
+        return $url;
     }
 
     private function toRelativePath(string $url): string
