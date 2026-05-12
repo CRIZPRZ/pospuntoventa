@@ -74,8 +74,9 @@ class Producto extends Model
         }
         // Strip any accidental /storage/ prefix before generating URL
         $clean = ltrim(preg_replace('#^/storage/#', '', $path), '/');
-        $url = Storage::url($clean);
-        // If Storage::url returns relative (APP_URL not set), prefix manually
+        // Always use 'public' disk — images are stored with store('...', 'public')
+        $url = Storage::disk('public')->url($clean);
+        // Fallback: if still relative, prefix with APP_URL manually
         if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
             $base = rtrim(config('app.url'), '/');
             $url = $base . '/' . ltrim($url, '/');
