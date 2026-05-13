@@ -16,13 +16,15 @@ class Venta extends Model
         'empresa_id', 'folio', 'user_id', 'caja_id', 'cliente_id',
         'subtotal', 'descuento', 'impuesto', 'total',
         'tipo_pago', 'estado', 'cancelada_por', 'notas',
+        'cfdi_uuid', 'cfdi_facturapi_id', 'cfdi_xml', 'cfdi_status', 'cfdi_receptor',
     ];
 
     protected $casts = [
-        'subtotal'  => 'decimal:2',
-        'descuento' => 'decimal:2',
-        'impuesto'  => 'decimal:2',
-        'total'     => 'decimal:2',
+        'subtotal'      => 'decimal:2',
+        'descuento'     => 'decimal:2',
+        'impuesto'      => 'decimal:2',
+        'total'         => 'decimal:2',
+        'cfdi_receptor' => 'array',
     ];
 
     protected static function booted(): void

@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\ReportesController;
 use App\Http\Controllers\Api\ProveedorController;
 use App\Http\Controllers\Api\PagoProveedorController;
 use App\Http\Controllers\Api\RolPermisoController;
+use App\Http\Controllers\Api\FacturacionController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('register', [RegisterController::class, 'register']);
@@ -191,6 +192,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('pedidos/{pedido}', [PedidoController::class, 'update']);
         Route::patch('pedidos/{pedido}/status', [PedidoController::class, 'cambiarStatus']);
         Route::delete('pedidos/{pedido}', [PedidoController::class, 'destroy']);
+        Route::post('pedidos/{pedido}/enviar', [PedidoController::class, 'enviar']);
+        Route::post('pedidos/{pedido}/recordar', [PedidoController::class, 'recordar']);
     });
 
     // Roles y permisos
@@ -199,8 +202,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('permisos', [RolPermisoController::class, 'permisos']);
     });
 
+    // Facturación CFDI
+    Route::prefix('facturacion')->group(function () {
+        Route::post('setup',      [FacturacionController::class, 'setup']);
+        Route::post('upload-csd', [FacturacionController::class, 'uploadCsd']);
+        Route::post('test',       [FacturacionController::class, 'test']);
+    });
+    Route::post('ventas/{venta}/facturar',  [FacturacionController::class, 'facturar']);
+    Route::get('ventas/{venta}/cfdi/xml',   [FacturacionController::class, 'downloadXml']);
+    Route::get('ventas/{venta}/cfdi/pdf',   [FacturacionController::class, 'downloadPdf']);
+
     // Mercado Libre
     Route::prefix('mercado-libre')->group(function () {
+
         Route::middleware('can:gestionar configuracion')->group(function () {
             Route::get('config', [MercadoLibreController::class, 'config']);
             Route::post('config', [MercadoLibreController::class, 'saveConfig']);

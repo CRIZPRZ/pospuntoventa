@@ -35,6 +35,10 @@ return [
         ],
     ],
 
+    'facturapi' => [
+        'user_key' => env('FACTURAPI_USER_KEY'),
+    ],
+
     'mercadolibre' => [
         'client_id' => env('MELI_CLIENT_ID'),
         'client_secret' => env('MELI_CLIENT_SECRET'),

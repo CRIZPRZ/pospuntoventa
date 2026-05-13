@@ -9,10 +9,12 @@ use App\Models\Pedido;
 use App\Models\PedidoItem;
 use App\Models\Venta;
 use App\Models\VentaItem;
+use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
 
 class CotizacionController extends Controller
 {
+    use EnviaCorreosTrait;
     public function index(Request $request)
     {
         $query = Cotizacion::with(['cliente:id,nombre', 'vendedor:id,name', 'items'])
@@ -96,6 +98,21 @@ class CotizacionController extends Controller
         }
 
         $cotizacion->calcularTotales();
+
+        $email = $cotizacion->email_cliente ?? $cotizacion->cliente?->email ?? null;
+        if ($this->notifAlCrear() && $email) {
+            try {
+                $cotizacion->loadMissing(['cliente', 'vendedor:id,name', 'items']);
+                $html = $this->buildEmailWrapper(
+                    $this->buildCotizacionBodyHtml($cotizacion),
+                    'Cotización'
+                );
+                $this->enviarConCC($email, 'Cotización ' . $cotizacion->folio, $html);
+                $cotizacion->update(['status' => 'enviada']);
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning('Auto-envío cotización falló: ' . $e->getMessage());
+            }
+        }
 
         return response()->json($cotizacion->load(['cliente', 'vendedor:id,name', 'items.producto']), 201);
     }
@@ -287,20 +304,18 @@ class CotizacionController extends Controller
     {
         $cotizacion->load(['cliente', 'vendedor:id,name', 'items.producto']);
 
-        $email = $cotizacion->email_cliente
-            ?? $cotizacion->cliente?->email
-            ?? null;
+        $email = $cotizacion->email_cliente ?? $cotizacion->cliente?->email ?? null;
 
         if (!$email) {
             return response()->json(['message' => 'No hay email configurado para esta cotización'], 422);
         }
 
-        $html = $this->buildTicketHtml($cotizacion);
-
         try {
-            \Illuminate\Support\Facades\Mail::html($html, function ($message) use ($cotizacion, $email) {
-                $message->to($email)->subject('Cotización ' . $cotizacion->folio);
-            });
+            $html = $this->buildEmailWrapper(
+                $this->buildCotizacionBodyHtml($cotizacion),
+                'Cotización'
+            );
+            $this->enviarConCC($email, 'Cotización ' . $cotizacion->folio, $html);
 
             if ($cotizacion->status === 'borrador') {
                 $cotizacion->update(['status' => 'enviada']);
@@ -308,12 +323,87 @@ class CotizacionController extends Controller
 
             return response()->json([
                 'message' => 'Cotización enviada a ' . $email,
-                'status' => $cotizacion->status,
+                'status'  => $cotizacion->status,
             ]);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Error enviando cotización: ' . $e->getMessage());
             return response()->json(['message' => 'Error al enviar email: ' . $e->getMessage()], 500);
         }
+    }
+
+    private function buildCotizacionBodyHtml(Cotizacion $cotizacion): string
+    {
+        $color = $this->getNotifConfig()['color_primario'] ?? '#2563eb';
+        $nombreCliente = htmlspecialchars($cotizacion->cliente?->nombre ?? $cotizacion->nombre_cliente ?? 'Cliente general');
+        $fecha = $cotizacion->fecha->format('d/m/Y');
+        $vencimiento = $cotizacion->fecha_vencimiento?->format('d/m/Y') ?? 'Sin vencimiento';
+
+        $itemsHtml = '';
+        foreach ($cotizacion->items as $item) {
+            $itemsHtml .= sprintf(
+                '<tr><td style="padding:8px;border-bottom:1px solid #f3f4f6">%s</td>
+                 <td style="padding:8px;border-bottom:1px solid #f3f4f6;text-align:center">%s</td>
+                 <td style="padding:8px;border-bottom:1px solid #f3f4f6;text-align:right">$%s</td>
+                 <td style="padding:8px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600">$%s</td></tr>',
+                htmlspecialchars($item->descripcion),
+                number_format($item->cantidad, 2),
+                number_format($item->precio_unitario, 2),
+                number_format($item->subtotal, 2)
+            );
+        }
+
+        $totalesHtml = '';
+        if ($cotizacion->descuento > 0) {
+            $totalesHtml .= '<tr><td style="text-align:right;padding:4px 8px;color:#6b7280">Descuento (' . $cotizacion->descuento . '%):</td>
+                <td style="text-align:right;padding:4px 8px;color:#d97706">-$' . number_format($cotizacion->subtotal * $cotizacion->descuento / 100, 2) . '</td></tr>';
+        }
+        if ($cotizacion->impuesto_pct > 0) {
+            $totalesHtml .= '<tr><td style="text-align:right;padding:4px 8px;color:#6b7280">IVA (' . $cotizacion->impuesto_pct . '%):</td>
+                <td style="text-align:right;padding:4px 8px">$' . number_format($cotizacion->subtotal * $cotizacion->impuesto_pct / 100, 2) . '</td></tr>';
+        }
+
+        $notasHtml = $cotizacion->notas
+            ? '<div style="margin-top:20px;padding:12px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">
+                <p style="margin:0 0 4px;font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em">Notas</p>
+                <p style="margin:0;font-size:13px;color:#374151">' . htmlspecialchars($cotizacion->notas) . '</p></div>'
+            : '';
+
+        $total = number_format($cotizacion->total, 2);
+
+        return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+  <div style="padding:12px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">
+    <p style="margin:0 0 2px;font-size:11px;color:#9ca3af;text-transform:uppercase">Cliente</p>
+    <p style="margin:0;font-weight:600;color:#111827">' . $nombreCliente . '</p>
+  </div>
+  <div style="padding:12px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">
+    <p style="margin:0 0 2px;font-size:11px;color:#9ca3af;text-transform:uppercase">Folio</p>
+    <p style="margin:0;font-weight:600;color:' . $color . '">' . $cotizacion->folio . '</p>
+  </div>
+  <div style="padding:12px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">
+    <p style="margin:0 0 2px;font-size:11px;color:#9ca3af;text-transform:uppercase">Fecha</p>
+    <p style="margin:0;font-weight:600;color:#111827">' . $fecha . '</p>
+  </div>
+  <div style="padding:12px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb">
+    <p style="margin:0 0 2px;font-size:11px;color:#9ca3af;text-transform:uppercase">Vence</p>
+    <p style="margin:0;font-weight:600;color:#111827">' . $vencimiento . '</p>
+  </div>
+</div>
+<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:12px">
+  <thead><tr style="background:#f3f4f6">
+    <th style="padding:10px 8px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase">Descripción</th>
+    <th style="padding:10px 8px;text-align:center;font-size:11px;color:#6b7280;text-transform:uppercase">Cant.</th>
+    <th style="padding:10px 8px;text-align:right;font-size:11px;color:#6b7280;text-transform:uppercase">P.U.</th>
+    <th style="padding:10px 8px;text-align:right;font-size:11px;color:#6b7280;text-transform:uppercase">Subtotal</th>
+  </tr></thead>
+  <tbody>' . $itemsHtml . '</tbody>
+</table>
+<table width="300" cellpadding="0" cellspacing="0" style="margin-left:auto">
+  ' . $totalesHtml . '
+  <tr>
+    <td style="text-align:right;padding:8px;font-size:16px;font-weight:700;color:' . $color . ';border-top:2px solid #e5e7eb">TOTAL:</td>
+    <td style="text-align:right;padding:8px;font-size:16px;font-weight:700;color:' . $color . ';border-top:2px solid #e5e7eb">$' . $total . '</td>
+  </tr>
+</table>' . $notasHtml;
     }
 
     private function buildTicketHtml(Cotizacion $cotizacion): string
