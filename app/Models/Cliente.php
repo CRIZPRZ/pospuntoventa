@@ -14,6 +14,7 @@ class Cliente extends Model
     protected $fillable = [
         'empresa_id', 'nombre', 'email', 'telefono', 'rfc',
         'direccion', 'limite_credito', 'saldo_credito', 'activo',
+        'codigo_postal', 'regimen_fiscal', 'uso_cfdi',
     ];
 
     protected $casts = [

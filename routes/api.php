@@ -207,10 +207,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('setup',      [FacturacionController::class, 'setup']);
         Route::post('upload-csd', [FacturacionController::class, 'uploadCsd']);
         Route::post('test',       [FacturacionController::class, 'test']);
+        Route::post('keys',       [FacturacionController::class, 'saveKeys']);
+        Route::post('reset',           [FacturacionController::class, 'reset']);
+        Route::post('actualizar-legal', [FacturacionController::class, 'actualizarLegal']);
+        Route::post('confirmar-csd',    [FacturacionController::class, 'confirmarCsd']);
     });
-    Route::post('ventas/{venta}/facturar',  [FacturacionController::class, 'facturar']);
-    Route::get('ventas/{venta}/cfdi/xml',   [FacturacionController::class, 'downloadXml']);
-    Route::get('ventas/{venta}/cfdi/pdf',   [FacturacionController::class, 'downloadPdf']);
+    Route::post('ventas/{venta}/facturar',         [FacturacionController::class, 'facturar']);
+    Route::post('ventas/{venta}/cfdi/reenviar',    [FacturacionController::class, 'reenviarEmail']);
+    Route::get('ventas/{venta}/cfdi/xml',          [FacturacionController::class, 'downloadXml']);
+    Route::get('ventas/{venta}/cfdi/pdf',          [FacturacionController::class, 'downloadPdf']);
 
     // Mercado Libre
     Route::prefix('mercado-libre')->group(function () {

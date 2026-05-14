@@ -29,12 +29,15 @@ class ClienteController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'nombre' => ['required', 'string', 'max:255'],
-            'email' => ['nullable', 'email', 'max:255'],
-            'telefono' => ['nullable', 'string', 'max:50'],
-            'rfc' => ['nullable', 'string', 'max:20'],
-            'direccion' => ['nullable', 'string', 'max:500'],
+            'nombre'         => ['required', 'string', 'max:255'],
+            'email'          => ['nullable', 'email', 'max:255'],
+            'telefono'       => ['nullable', 'string', 'max:50'],
+            'rfc'            => ['nullable', 'string', 'max:20'],
+            'direccion'      => ['nullable', 'string', 'max:500'],
             'limite_credito' => ['required', 'numeric', 'min:0'],
+            'codigo_postal'  => ['nullable', 'string', 'max:10'],
+            'regimen_fiscal' => ['nullable', 'string', 'max:10'],
+            'uso_cfdi'       => ['nullable', 'string', 'max:10'],
         ]);
 
         $data['activo'] = $request->boolean('activo', true);
@@ -55,13 +58,16 @@ class ClienteController extends Controller
     public function update(Request $request, Cliente $cliente)
     {
         $data = $request->validate([
-            'nombre' => ['sometimes', 'string', 'max:255'],
-            'email' => ['nullable', 'email', 'max:255'],
-            'telefono' => ['nullable', 'string', 'max:50'],
-            'rfc' => ['nullable', 'string', 'max:20'],
-            'direccion' => ['nullable', 'string', 'max:500'],
+            'nombre'         => ['sometimes', 'string', 'max:255'],
+            'email'          => ['nullable', 'email', 'max:255'],
+            'telefono'       => ['nullable', 'string', 'max:50'],
+            'rfc'            => ['nullable', 'string', 'max:20'],
+            'direccion'      => ['nullable', 'string', 'max:500'],
             'limite_credito' => ['sometimes', 'numeric', 'min:0'],
-            'activo' => ['sometimes', 'boolean'],
+            'activo'         => ['sometimes', 'boolean'],
+            'codigo_postal'  => ['nullable', 'string', 'max:10'],
+            'regimen_fiscal' => ['nullable', 'string', 'max:10'],
+            'uso_cfdi'       => ['nullable', 'string', 'max:10'],
         ]);
 
         $cliente->update($data);

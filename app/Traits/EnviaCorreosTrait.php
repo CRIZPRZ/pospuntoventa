@@ -63,15 +63,15 @@ trait EnviaCorreosTrait
         });
     }
 
-    protected function buildEmailWrapper(string $contentHtml, string $subtitulo = ''): string
+    protected function buildEmailWrapper(string $contentHtml, string $subtitulo = '', array $overrides = []): string
     {
         $notif   = $this->getNotifConfig();
         $empresa = $this->getConfig()['empresa'] ?? [];
         $config  = $this->getConfig();
 
-        $color       = $notif['color_primario'] ?? '#2563eb';
-        $encabezado  = $notif['encabezado']    ?? '¡Gracias por su preferencia!';
-        $intro       = $notif['intro']         ?? '';
+        $color       = $overrides['color']      ?? $notif['color_primario'] ?? '#2563eb';
+        $encabezado  = $overrides['encabezado'] ?? $notif['encabezado']    ?? '¡Gracias por su preferencia!';
+        $intro       = $overrides['intro']      ?? $notif['intro']         ?? '';
         $pie         = $notif['pie']           ?? '';
         $mostrarLogo = (bool) ($notif['mostrar_logo'] ?? true);
         $logoUrl     = $mostrarLogo ? $this->getLogoUrl() : null;
