@@ -4,13 +4,16 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Categoria;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 
 class CategoriaController extends Controller
 {
+    use ScopesBySucursal;
+
     public function index(Request $request)
     {
-        $query = Categoria::query()->orderBy('nombre');
+        $query = $this->applySucursalScope(Categoria::query()->orderBy('nombre'));
 
         if ($request->filled('q')) {
             $query->where('nombre', 'like', "%{$request->q}%");
@@ -25,9 +28,10 @@ class CategoriaController extends Controller
 
     public function store(Request $request)
     {
-        $categoria = Categoria::create($this->validated($request));
+        $data                = $this->validated($request);
+        $data['sucursal_id'] = $this->sucursalId();
 
-        return response()->json($categoria, 201);
+        return response()->json(Categoria::create($data), 201);
     }
 
     public function show(Categoria $categoria)
@@ -52,10 +56,10 @@ class CategoriaController extends Controller
     private function validated(Request $request): array
     {
         return $request->validate([
-            'nombre' => ['required', 'string', 'max:255'],
+            'nombre'      => ['required', 'string', 'max:255'],
             'descripcion' => ['nullable', 'string'],
-            'color' => ['nullable', 'string', 'max:7'],
-            'activo' => ['nullable', 'boolean'],
+            'color'       => ['nullable', 'string', 'max:7'],
+            'activo'      => ['nullable', 'boolean'],
         ]);
     }
 }

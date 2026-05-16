@@ -61,6 +61,7 @@ class RolPermisoController extends Controller
             'Proveedores'       => ['ver proveedores', 'gestionar proveedores'],
             'Pagos Proveedores' => ['ver pagos proveedores', 'gestionar pagos proveedores'],
             'Cotizaciones'      => ['ver cotizaciones', 'gestionar cotizaciones'],
+            'Sucursales'        => ['ver sucursales', 'gestionar sucursales'],
         ];
 
         $permisos = Permission::orderBy('name')->get()->map(fn ($p) => [

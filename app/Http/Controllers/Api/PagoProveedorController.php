@@ -3,16 +3,20 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use App\Models\PagoProveedor;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
 class PagoProveedorController extends Controller
 {
+    use ScopesBySucursal;
+
     public function index(Request $request)
     {
-        $query = PagoProveedor::with('proveedor:id,nombre', 'usuario:id,name')
-            ->orderByDesc('created_at');
+        $query = $this->applySucursalScope(
+            PagoProveedor::with('proveedor:id,nombre', 'usuario:id,name')->orderByDesc('created_at')
+        );
 
         if ($request->filled('fecha')) {
             $query->whereDate('created_at', $request->fecha);

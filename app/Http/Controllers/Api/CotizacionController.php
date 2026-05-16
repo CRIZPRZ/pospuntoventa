@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use App\Models\Cotizacion;
 use App\Models\CotizacionItem;
 use App\Models\Pedido;
@@ -14,11 +15,13 @@ use Illuminate\Http\Request;
 
 class CotizacionController extends Controller
 {
-    use EnviaCorreosTrait;
+    use EnviaCorreosTrait, ScopesBySucursal;
+
     public function index(Request $request)
     {
-        $query = Cotizacion::with(['cliente:id,nombre', 'vendedor:id,name', 'items'])
-            ->latest();
+        $query = $this->applySucursalScope(
+            Cotizacion::with(['cliente:id,nombre', 'vendedor:id,name', 'items'])->latest()
+        );
 
         if ($request->filled('q')) {
             $search = $request->string('q');

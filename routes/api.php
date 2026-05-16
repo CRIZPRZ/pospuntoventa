@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\ProveedorController;
 use App\Http\Controllers\Api\PagoProveedorController;
 use App\Http\Controllers\Api\RolPermisoController;
 use App\Http\Controllers\Api\FacturacionController;
+use App\Http\Controllers\Api\SucursalController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('register', [RegisterController::class, 'register']);
@@ -45,6 +46,7 @@ Route::middleware('auth:sanctum')->group(function () {
     });
     Route::middleware('can:gestionar productos')->group(function () {
         Route::post('productos', [ProductoController::class, 'store']);
+        Route::post('productos/importar', [ProductoController::class, 'importar']);
         Route::put('productos/{producto}', [ProductoController::class, 'update']);
         Route::delete('productos/{producto}', [ProductoController::class, 'destroy']);
         Route::post('productos/{producto}/imprimir-etiqueta', [ProductoController::class, 'imprimirEtiqueta']);
@@ -196,6 +198,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('pedidos/{pedido}/recordar', [PedidoController::class, 'recordar']);
     });
 
+    // Sucursales
+    Route::middleware('can:ver sucursales')->group(function () {
+        Route::get('sucursales', [SucursalController::class, 'index']);
+        Route::get('sucursales/{sucursal}', [SucursalController::class, 'show']);
+        Route::get('sucursales/{sucursal}/usuarios', [SucursalController::class, 'usuarios']);
+    });
+    Route::middleware('can:gestionar sucursales')->group(function () {
+        Route::post('sucursales', [SucursalController::class, 'store']);
+        Route::put('sucursales/{sucursal}', [SucursalController::class, 'update']);
+        Route::delete('sucursales/{sucursal}', [SucursalController::class, 'destroy']);
+        Route::post('sucursales/{sucursal}/usuarios', [SucursalController::class, 'addUsuario']);
+        Route::delete('sucursales/{sucursal}/usuarios/{usuario}', [SucursalController::class, 'removeUsuario']);
+        Route::post('sucursales/{sucursal}/importar-catalogo', [SucursalController::class, 'importarCatalogo']);
+    });
+
     // Roles y permisos
     Route::middleware('can:gestionar roles')->group(function () {
         Route::apiResource('roles', RolPermisoController::class)->except(['show']);
@@ -220,7 +237,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Mercado Libre
     Route::prefix('mercado-libre')->group(function () {
 
-        Route::middleware('can:gestionar configuracion')->group(function () {
+        Route::middleware('can:gestionar mercado libre')->group(function () {
             Route::get('config', [MercadoLibreController::class, 'config']);
             Route::post('config', [MercadoLibreController::class, 'saveConfig']);
             Route::get('auth-url', [MercadoLibreController::class, 'authUrl']);
@@ -238,7 +255,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('clear-test-user', [MercadoLibreController::class, 'clearTestUser']);
         });
 
-        Route::middleware('can:gestionar productos')->group(function () {
+        Route::middleware('can:ver mercado libre')->group(function () {
             Route::post('productos/{producto}/publish', [MercadoLibreController::class, 'publish']);
             Route::post('productos/{producto}/sync-stock', [MercadoLibreController::class, 'syncStock']);
             Route::post('productos/{producto}/sync-price', [MercadoLibreController::class, 'syncPrice']);

@@ -4,21 +4,27 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Categoria;
 use App\Models\Producto;
+use App\Models\Proveedor;
 use App\Services\MercadoLibreService;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class ProductoController extends Controller
 {
+    use ScopesBySucursal;
+
     public function __construct(private MercadoLibreService $meliService)
     {
     }
 
     public function index(Request $request)
     {
-        $query = Producto::with(['categoria', 'proveedor', 'mercadoLibre'])->latest();
+        $query = $this->applySucursalScope(
+            Producto::with(['categoria', 'proveedor', 'mercadoLibre'])->latest()
+        );
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -34,6 +40,10 @@ class ProductoController extends Controller
             $query->whereHas('categoria', fn ($q) => $q->where('nombre', $request->categoria));
         }
 
+        if ($request->filled('proveedor_id')) {
+            $query->where('proveedor_id', $request->integer('proveedor_id'));
+        }
+
         if ($request->has('activo')) {
             $query->where('activo', filter_var($request->activo, FILTER_VALIDATE_BOOLEAN));
         }
@@ -44,6 +54,7 @@ class ProductoController extends Controller
     public function store(Request $request)
     {
         $data = $this->validated($request);
+        $data['sucursal_id'] = $this->sucursalId();
         $producto = Producto::create($data)->load(['categoria', 'proveedor', 'mercadoLibre']);
 
         return response()->json($producto, 201);
@@ -88,6 +99,94 @@ class ProductoController extends Controller
         return $this->index($request);
     }
 
+    public function importar(Request $request)
+    {
+        $request->validate([
+            'productos'                   => ['required', 'array', 'min:1', 'max:5000'],
+            'productos.*.nombre'          => ['required', 'string', 'max:255'],
+            'productos.*.precio'          => ['nullable', 'numeric', 'min:0'],
+            'productos.*.precio_mayoreo'  => ['nullable', 'numeric', 'min:0'],
+            'productos.*.precio_compra'   => ['nullable', 'numeric', 'min:0'],
+            'productos.*.stock'           => ['nullable', 'integer', 'min:0'],
+            'productos.*.stock_minimo'    => ['nullable', 'integer', 'min:0'],
+            'productos.*.codigo_barras'   => ['nullable', 'string', 'max:255'],
+            'productos.*.categoria'       => ['nullable', 'string', 'max:255'],
+            'productos.*.proveedor'       => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $creados      = 0;
+        $actualizados = 0;
+        $errores      = [];
+        $catCache     = [];
+        $provCache    = [];
+        $sucursalId   = $this->sucursalId();
+
+        foreach ($request->productos as $indm => $item) {
+            try {
+                $categoriaId = null;
+                if (!empty($item['categoria'])) {
+                    $nombre = trim($item['categoria']);
+                    if (!isset($catCache[$nombre])) {
+                        $catCache[$nombre] = Categoria::firstOrCreate(
+                            ['nombre' => $nombre, 'sucursal_id' => $sucursalId],
+                            ['descripcion' => null, 'color' => '#2563eb', 'activo' => true]
+                        )->id;
+                    }
+                    $categoriaId = $catCache[$nombre];
+                }
+
+                $proveedorId = null;
+                if (!empty($item['proveedor'])) {
+                    $nombre = trim($item['proveedor']);
+                    if (!isset($provCache[$nombre])) {
+                        $provCache[$nombre] = Proveedor::firstOrCreate(
+                            ['nombre' => $nombre, 'sucursal_id' => $sucursalId],
+                            ['activo' => true]
+                        )->id;
+                    }
+                    $proveedorId = $provCache[$nombre];
+                }
+
+                $data = [
+                    'nombre'        => $item['nombre'],
+                    'precio'        => $item['precio'] ?? 0,
+                    'precio_mayoreo' => $item['precio_mayoreo'] ?? null,
+                    'precio_compra' => $item['precio_compra'] ?? 0,
+                    'stock'         => $item['stock'] ?? 0,
+                    'stock_minimo'  => $item['stock_minimo'] ?? 0,
+                    'codigo_barras' => $item['codigo_barras'] ?? null,
+                    'categoria_id'  => $categoriaId,
+                    'proveedor_id'  => $proveedorId,
+                    'sucursal_id'   => $sucursalId,
+                    'activo'        => true,
+                ];
+
+                if (!empty($item['codigo_barras'])) {
+                    $producto = Producto::updateOrCreate(
+                        ['codigo_barras' => $item['codigo_barras']],
+                        $data
+                    );
+                    $producto->wasRecentlyCreated ? $creados++ : $actualizados++;
+                } else {
+                    Producto::create($data);
+                    $creados++;
+                }
+            } catch (\Exception $e) {
+                $errores[] = [
+                    'fila'   => $index + 1,
+                    'nombre' => $item['nombre'] ?? '?',
+                    'error'  => $e->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'creados'     => $creados,
+            'actualizados' => $actualizados,
+            'errores'     => $errores,
+        ]);
+    }
+
     private function validated(Request $request, ?Producto $producto = null): array
     {
         $data = $request->validate([
@@ -104,6 +203,7 @@ class ProductoController extends Controller
             'categoria' => ['nullable', 'string', 'max:255'],
             'proveedor_id' => ['nullable', 'exists:proveedores,id'],
             'precio' => ['required', 'numeric', 'min:0'],
+            'precio_mayoreo' => ['nullable', 'numeric', 'min:0'],
             'precio_compra' => ['nullable', 'numeric', 'min:0'],
             'stock' => ['required', 'integer', 'min:0'],
             'stock_minimo' => ['nullable', 'integer', 'min:0'],
@@ -139,7 +239,7 @@ class ProductoController extends Controller
 
         if (! empty($data['categoria']) && empty($data['categoria_id'])) {
             $categoria = Categoria::firstOrCreate(
-                ['nombre' => $data['categoria']],
+                ['nombre' => $data['categoria'], 'sucursal_id' => $this->sucursalId()],
                 ['descripcion' => null, 'color' => '#2563eb', 'activo' => true]
             );
             $data['categoria_id'] = $categoria->id;

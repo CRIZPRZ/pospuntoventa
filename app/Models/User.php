@@ -16,7 +16,7 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable, HasApiTokens, HasRoles;
 
-    protected $fillable = ['name', 'email', 'password', 'empresa_id'];
+    protected $fillable = ['name', 'email', 'password', 'empresa_id', 'sucursal_id'];
 
     protected $hidden = ['password', 'remember_token'];
 
@@ -40,5 +40,17 @@ class User extends Authenticatable
     public function empresa(): BelongsTo
     {
         return $this->belongsTo(Empresa::class);
+    }
+
+    public function sucursalDefault(): BelongsTo
+    {
+        return $this->belongsTo(Sucursal::class, 'sucursal_id');
+    }
+
+    public function sucursales(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Sucursal::class, 'usuario_sucursal')
+                    ->withPivot('role_id')
+                    ->withTimestamps();
     }
 }

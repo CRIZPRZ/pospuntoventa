@@ -10,7 +10,7 @@ class PagoProveedor extends Model
     protected $table = 'pagos_proveedores';
 
     protected $fillable = [
-        'empresa_id', 'proveedor_id', 'concepto', 'monto', 'metodo_pago', 'referencia', 'notas', 'user_id',
+        'empresa_id', 'sucursal_id', 'proveedor_id', 'concepto', 'monto', 'metodo_pago', 'referencia', 'notas', 'user_id',
     ];
 
     protected $casts = ['monto' => 'decimal:2'];
@@ -26,6 +26,9 @@ class PagoProveedor extends Model
         static::creating(function (self $model) {
             if (!$model->empresa_id && app()->bound('tenant_id')) {
                 $model->empresa_id = app('tenant_id');
+            }
+            if (!$model->sucursal_id && app()->bound('sucursal_id')) {
+                $model->sucursal_id = app('sucursal_id');
             }
         });
     }

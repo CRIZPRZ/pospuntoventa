@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
 {
@@ -18,7 +19,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'Credenciales incorrectas'], 401);
         }
 
-        $user = auth()->user()->load('roles', 'permissions', 'empresa');
+        $user = auth()->user()->load('roles', 'permissions', 'empresa', 'sucursalDefault');
         $token = $user->createToken('ventas-pos')->plainTextToken;
 
         return response()->json([
@@ -35,16 +36,27 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        $user = $request->user()->load('roles', 'permissions', 'empresa');
+        $user = $request->user()->load('roles', 'permissions', 'empresa', 'sucursalDefault');
         return response()->json(['user' => $this->formatUser($user)]);
     }
 
     private function formatUser($user): array
     {
+        // Sucursales del usuario con su rol en cada una
+        $sucursales = \Illuminate\Support\Facades\DB::table('usuario_sucursal as us')
+            ->join('sucursales', 'sucursales.id', '=', 'us.sucursal_id')
+            ->join('roles', 'roles.id', '=', 'us.role_id')
+            ->where('us.user_id', $user->id)
+            ->where('sucursales.activo', true)
+            ->select('sucursales.id', 'sucursales.nombre', 'sucursales.es_principal', 'roles.name as rol')
+            ->get();
+
         return array_merge($user->toArray(), [
-            'roles'       => $user->getRoleNames(),
-            'permissions' => $user->getAllPermissions()->pluck('name'),
-            'empresa'     => $user->empresa?->only(['id', 'nombre', 'slug']),
+            'roles'            => $user->getRoleNames(),
+            'permissions'      => $user->getAllPermissions()->pluck('name'),
+            'empresa'          => $user->empresa?->only(['id', 'nombre', 'slug']),
+            'sucursal_activa'  => $user->sucursalDefault?->only(['id', 'nombre', 'es_principal']),
+            'sucursales'       => $sucursales,
         ]);
     }
 }

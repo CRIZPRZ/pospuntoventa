@@ -13,7 +13,7 @@ class Venta extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'empresa_id', 'folio', 'user_id', 'caja_id', 'cliente_id',
+        'empresa_id', 'sucursal_id', 'folio', 'user_id', 'caja_id', 'cliente_id',
         'subtotal', 'descuento', 'impuesto', 'total',
         'tipo_pago', 'estado', 'cancelada_por', 'notas',
         'cfdi_uuid', 'cfdi_facturapi_id', 'cfdi_xml', 'cfdi_status', 'cfdi_receptor',

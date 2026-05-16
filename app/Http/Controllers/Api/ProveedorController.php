@@ -4,13 +4,16 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Proveedor;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 
 class ProveedorController extends Controller
 {
+    use ScopesBySucursal;
+
     public function index(Request $request)
     {
-        $query = Proveedor::query()->latest();
+        $query = $this->applySucursalScope(Proveedor::query()->latest());
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -37,7 +40,8 @@ class ProveedorController extends Controller
             'notas'    => ['nullable', 'string'],
         ]);
 
-        $data['activo'] = $request->boolean('activo', true);
+        $data['activo']      = $request->boolean('activo', true);
+        $data['sucursal_id'] = $this->sucursalId();
 
         return response()->json(Proveedor::create($data), 201);
     }

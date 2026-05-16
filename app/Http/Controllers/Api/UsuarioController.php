@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Sucursal;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Spatie\Permission\Models\Role;
 
@@ -40,23 +42,39 @@ class UsuarioController extends Controller
         // Only show roles belonging to this tenant
         $roles = Role::where('empresa_id', $tenantId)->pluck('name')->toArray();
 
+        $sucursalIds = Sucursal::pluck('id')->toArray();
+
         $data = $request->validate([
-            'nombre'   => ['required_without:name', 'string', 'max:255'],
-            'name'     => ['required_without:nombre', 'string', 'max:255'],
-            'email'    => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:6'],
-            'rol'      => ['required', Rule::in($roles)],
+            'nombre'      => ['required_without:name', 'string', 'max:255'],
+            'name'        => ['required_without:nombre', 'string', 'max:255'],
+            'email'       => ['required', 'email', 'max:255', 'unique:users,email'],
+            'password'    => ['required', 'string', 'min:6'],
+            'rol'         => ['required', Rule::in($roles)],
+            'sucursal_id' => ['nullable', Rule::in($sucursalIds)],
         ]);
 
+        // Default: sucursal principal de la empresa
+        $sucursalId = $data['sucursal_id']
+            ?? Sucursal::where('es_principal', true)->value('id')
+            ?? Sucursal::first()?->id;
+
         $user = User::create([
-            'name'       => $data['name'] ?? $data['nombre'],
-            'email'      => $data['email'],
-            'password'   => $data['password'],
-            'empresa_id' => $tenantId,
+            'name'        => $data['name'] ?? $data['nombre'],
+            'email'       => $data['email'],
+            'password'    => $data['password'],
+            'empresa_id'  => $tenantId,
+            'sucursal_id' => $sucursalId,
         ]);
 
         $role = Role::where('empresa_id', $tenantId)->where('name', $data['rol'])->first();
         $user->assignRole($role);
+
+        if ($sucursalId) {
+            DB::table('usuario_sucursal')->updateOrInsert(
+                ['user_id' => $user->id, 'sucursal_id' => $sucursalId],
+                ['role_id' => $role->id, 'created_at' => now(), 'updated_at' => now()]
+            );
+        }
 
         return response()->json($this->formatUser($user->load('roles')), 201);
     }
@@ -66,22 +84,40 @@ class UsuarioController extends Controller
         $tenantId = app('tenant_id');
         $roles    = Role::where('empresa_id', $tenantId)->pluck('name')->toArray();
 
+        $sucursalIds = Sucursal::pluck('id')->toArray();
+
         $data = $request->validate([
-            'nombre'   => ['required_without:name', 'string', 'max:255'],
-            'name'     => ['required_without:nombre', 'string', 'max:255'],
-            'email'    => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($usuario)],
-            'password' => ['nullable', 'string', 'min:6'],
-            'rol'      => ['required', Rule::in($roles)],
+            'nombre'      => ['required_without:name', 'string', 'max:255'],
+            'name'        => ['required_without:nombre', 'string', 'max:255'],
+            'email'       => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($usuario)],
+            'password'    => ['nullable', 'string', 'min:6'],
+            'rol'         => ['required', Rule::in($roles)],
+            'sucursal_id' => ['nullable', Rule::in($sucursalIds)],
         ]);
 
-        $usuario->update(array_filter([
+        $updateData = array_filter([
             'name'     => $data['name'] ?? $data['nombre'],
             'email'    => $data['email'],
             'password' => $data['password'] ?? null,
-        ], fn ($value) => $value !== null && $value !== ''));
+        ], fn ($value) => $value !== null && $value !== '');
+
+        if (!empty($data['sucursal_id'])) {
+            $updateData['sucursal_id'] = $data['sucursal_id'];
+        }
+
+        $usuario->update($updateData);
 
         $role = Role::where('empresa_id', $tenantId)->where('name', $data['rol'])->first();
         $usuario->syncRoles([$role]);
+
+        // Actualizar rol en sucursal activa del usuario
+        $sucursalId = $data['sucursal_id'] ?? $usuario->sucursal_id;
+        if ($sucursalId && $role) {
+            DB::table('usuario_sucursal')->updateOrInsert(
+                ['user_id' => $usuario->id, 'sucursal_id' => $sucursalId],
+                ['role_id' => $role->id, 'updated_at' => now()]
+            );
+        }
 
         return response()->json($this->formatUser($usuario->fresh('roles')));
     }
@@ -107,16 +143,25 @@ class UsuarioController extends Controller
 
     private function formatUser(User $user): array
     {
+        $sucursales = DB::table('usuario_sucursal as us')
+            ->join('sucursales', 'sucursales.id', '=', 'us.sucursal_id')
+            ->join('roles', 'roles.id', '=', 'us.role_id')
+            ->where('us.user_id', $user->id)
+            ->select('sucursales.id', 'sucursales.nombre', 'roles.name as rol')
+            ->get();
+
         return [
-            'id'         => $user->id,
-            'name'       => $user->name,
-            'nombre'     => $user->name,
-            'email'      => $user->email,
-            'rol'        => $user->roles->first()?->name ?? 'sin rol',
-            'roles'      => $user->roles->pluck('name')->values(),
-            'activo'     => true,
-            'created_at' => $user->created_at,
-            'updated_at' => $user->updated_at,
+            'id'           => $user->id,
+            'name'         => $user->name,
+            'nombre'       => $user->name,
+            'email'        => $user->email,
+            'rol'          => $user->roles->first()?->name ?? 'sin rol',
+            'roles'        => $user->roles->pluck('name')->values(),
+            'sucursal_id'  => $user->sucursal_id,
+            'sucursales'   => $sucursales,
+            'activo'       => true,
+            'created_at'   => $user->created_at,
+            'updated_at'   => $user->updated_at,
         ];
     }
 }

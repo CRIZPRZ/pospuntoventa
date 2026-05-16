@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Categoria extends Model
 {
-    protected $fillable = ['empresa_id', 'nombre', 'descripcion', 'color', 'activo'];
+    protected $fillable = ['empresa_id', 'sucursal_id', 'nombre', 'descripcion', 'color', 'activo'];
 
     protected $casts = ['activo' => 'boolean'];
 
@@ -23,6 +23,9 @@ class Categoria extends Model
         static::creating(function (self $model) {
             if (!$model->empresa_id && app()->bound('tenant_id')) {
                 $model->empresa_id = app('tenant_id');
+            }
+            if (!$model->sucursal_id && app()->bound('sucursal_id')) {
+                $model->sucursal_id = app('sucursal_id');
             }
         });
     }

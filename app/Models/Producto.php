@@ -14,8 +14,8 @@ class Producto extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'empresa_id', 'categoria_id', 'proveedor_id', 'nombre', 'descripcion', 'codigo',
-        'codigo_barras', 'precio', 'precio_compra', 'stock', 'stock_minimo', 'unidad',
+        'empresa_id', 'sucursal_id', 'categoria_id', 'proveedor_id', 'nombre', 'descripcion', 'codigo',
+        'codigo_barras', 'precio', 'precio_mayoreo', 'precio_compra', 'stock', 'stock_minimo', 'unidad',
         'imagen', 'imagenes', 'activo', 'disponible_ml', 'control_stock',
     ];
 
@@ -37,6 +37,9 @@ class Producto extends Model
         static::creating(function (self $model) {
             if (!$model->empresa_id && app()->bound('tenant_id')) {
                 $model->empresa_id = app('tenant_id');
+            }
+            if (!$model->sucursal_id && app()->bound('sucursal_id')) {
+                $model->sucursal_id = app('sucursal_id');
             }
         });
     }

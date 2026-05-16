@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Empresa;
+use App\Models\Sucursal;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -40,14 +41,32 @@ class RegisterController extends Controller
         $adminRole = Role::find($roleId);
         $adminRole->syncPermissions(Permission::all());
 
-        // Crear usuario admin ligado a la empresa
+        // Crear sucursal principal de la empresa
+        $sucursal = Sucursal::withoutGlobalScopes()->create([
+            'empresa_id'   => $empresa->id,
+            'nombre'       => 'Sucursal Principal',
+            'es_principal' => true,
+            'activo'       => true,
+        ]);
+
+        // Crear usuario admin ligado a la empresa y sucursal principal
         $user = User::create([
             'name'       => $data['empresa_nombre'],
             'email'      => $data['email'],
             'password'   => $data['password'],
             'empresa_id' => $empresa->id,
+            'sucursal_id'=> $sucursal->id,
         ]);
         $user->assignRole($adminRole);
+
+        // Registrar usuario en sucursal principal con rol admin
+        DB::table('usuario_sucursal')->insert([
+            'user_id'     => $user->id,
+            'sucursal_id' => $sucursal->id,
+            'role_id'     => $adminRole->id,
+            'created_at'  => now(),
+            'updated_at'  => now(),
+        ]);
 
         // Establecer tenant para esta request
         app()->instance('tenant_id', $empresa->id);
@@ -57,9 +76,11 @@ class RegisterController extends Controller
         return response()->json([
             'token' => $token,
             'user'  => array_merge($user->fresh()->toArray(), [
-                'roles'       => $user->getRoleNames(),
-                'permissions' => $user->getAllPermissions()->pluck('name'),
-                'empresa'     => $empresa->only(['id', 'nombre', 'slug']),
+                'roles'           => $user->getRoleNames(),
+                'permissions'     => $user->getAllPermissions()->pluck('name'),
+                'empresa'         => $empresa->only(['id', 'nombre', 'slug']),
+                'sucursal_activa' => $sucursal->only(['id', 'nombre', 'es_principal']),
+                'sucursales'      => [array_merge($sucursal->only(['id', 'nombre', 'es_principal']), ['rol' => 'admin'])],
             ]),
         ], 201);
     }

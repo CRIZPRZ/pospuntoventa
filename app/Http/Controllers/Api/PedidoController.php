@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use App\Models\Pedido;
 use App\Models\PedidoItem;
 use App\Traits\EnviaCorreosTrait;
@@ -10,11 +11,13 @@ use Illuminate\Http\Request;
 
 class PedidoController extends Controller
 {
-    use EnviaCorreosTrait;
+    use EnviaCorreosTrait, ScopesBySucursal;
+
     public function index(Request $request)
     {
-        $query = Pedido::with(['cliente:id,nombre', 'vendedor:id,name', 'cotizacion:id,folio'])
-            ->latest();
+        $query = $this->applySucursalScope(
+            Pedido::with(['cliente:id,nombre', 'vendedor:id,name', 'cotizacion:id,folio'])->latest()
+        );
 
         if ($request->filled('q')) {
             $search = $request->string('q');

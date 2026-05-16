@@ -7,6 +7,7 @@ use App\Models\Caja;
 use App\Models\Producto;
 use App\Models\Venta;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Events\VentaCompletada;
@@ -14,11 +15,12 @@ use Illuminate\Validation\Rule;
 
 class VentaController extends Controller
 {
+    use ScopesBySucursal;
     public function index(Request $request)
     {
-        $query = Venta::with(['user', 'cliente', 'canceladoPor'])
-            ->withCount('items')
-            ->latest();
+        $query = $this->applySucursalScope(
+            Venta::with(['user', 'cliente', 'canceladoPor'])->withCount('items')->latest()
+        );
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -112,16 +114,17 @@ class VentaController extends Controller
             }
 
             $venta = Venta::create([
-                'user_id' => $request->user()->id,
-                'caja_id' => $caja->id,
-                'cliente_id' => $data['cliente_id'] ?? null,
-                'subtotal' => $subtotal,
-                'descuento' => $descuento,
-                'impuesto' => $impuesto,
-                'total' => $total,
-                'tipo_pago' => $data['tipo_pago'],
-                'estado' => 'completada',
-                'notas' => $data['notas'] ?? null,
+                'user_id'     => $request->user()->id,
+                'caja_id'     => $caja->id,
+                'sucursal_id' => $this->sucursalId(),
+                'cliente_id'  => $data['cliente_id'] ?? null,
+                'subtotal'    => $subtotal,
+                'descuento'   => $descuento,
+                'impuesto'    => $impuesto,
+                'total'       => $total,
+                'tipo_pago'   => $data['tipo_pago'],
+                'estado'      => 'completada',
+                'notas'       => $data['notas'] ?? null,
             ]);
 
             foreach ($items as $item) {
@@ -228,7 +231,8 @@ class VentaController extends Controller
 
     private function getConfiguracion(): array
     {
-        return \Illuminate\Support\Facades\Cache::get('ventas_configuracion', []);
+        $ctrl = new ConfiguracionController();
+        return $ctrl->mergedConfig();
     }
 
     private function imprimirTicketTermico(Venta $venta, array $configuracion, array $requestConfig): void
@@ -254,7 +258,10 @@ class VentaController extends Controller
         $printer->setJustification(\Mike42\Escpos\Printer::JUSTIFY_CENTER);
         if ($ticket['mostrar_datos_negocio'] ?? true) {
             $empresa = $configuracion['empresa'] ?? [];
-            $printer->text($empresa['nombre'] ?? 'Mi Empresa' . "\n");
+            $nombreComercial = !empty($configuracion['nombre_comercial'])
+                ? $configuracion['nombre_comercial']
+                : ($empresa['nombre'] ?? 'Mi Empresa');
+            $printer->text($nombreComercial . "\n");
             if (!empty($empresa['rfc'])) $printer->text("RFC: {$empresa['rfc']}\n");
             if (!empty($empresa['direccion'])) $printer->text($empresa['direccion'] . "\n");
             if (!empty($empresa['telefono'])) $printer->text("Tel: {$empresa['telefono']}\n");

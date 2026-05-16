@@ -15,7 +15,7 @@ class Cotizacion extends Model
     protected $table = 'cotizaciones';
 
     protected $fillable = [
-        'empresa_id', 'folio', 'cliente_id', 'nombre_cliente', 'email_cliente', 'vendedor_id',
+        'empresa_id', 'sucursal_id', 'folio', 'cliente_id', 'nombre_cliente', 'email_cliente', 'vendedor_id',
         'fecha', 'fecha_vencimiento', 'status',
         'subtotal', 'descuento', 'impuesto_pct', 'total',
         'notas', 'venta_id', 'pedido_id',
@@ -41,6 +41,9 @@ class Cotizacion extends Model
         static::creating(function (self $model) {
             if (!$model->empresa_id && app()->bound('tenant_id')) {
                 $model->empresa_id = app('tenant_id');
+            }
+            if (!$model->sucursal_id && app()->bound('sucursal_id')) {
+                $model->sucursal_id = app('sucursal_id');
             }
         });
     }

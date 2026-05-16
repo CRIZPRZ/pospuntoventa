@@ -10,30 +10,39 @@ class CortesController extends Controller
 {
     public function hoy(Request $request)
     {
-        $fecha    = $request->get('fecha', now()->format('Y-m-d'));
-        $cajeroId = $request->get('cajero_id', $request->get('cajero'));
+        $fecha      = $request->get('fecha', now()->format('Y-m-d'));
+        $cajeroId   = $request->get('cajero_id', $request->get('cajero'));
+        $empresaId  = app()->bound('tenant_id')  ? (int) app('tenant_id')  : null;
+        $sucursalId = app()->bound('sucursal_id') ? (int) app('sucursal_id') : null;
 
         $query = DB::table('ventas')
             ->join('users', 'ventas.user_id', '=', 'users.id')
             ->whereDate('ventas.created_at', $fecha)
             ->where('ventas.estado', '!=', 'cancelada');
 
+        if ($empresaId) {
+            $query->where('ventas.empresa_id', $empresaId);
+        }
+        if ($sucursalId) {
+            $query->where('ventas.sucursal_id', $sucursalId);
+        }
         if ($cajeroId) {
             $query->where('ventas.user_id', $cajeroId);
         }
 
-        $ventas = $query->select(
-            'ventas.*',
-            'users.name as cajero_nombre'
-        )->get();
+        $ventas = $query->select('ventas.*', 'users.name as cajero_nombre')->get();
 
-        // Sumar desde pagos por metodo — más preciso que ventas.tipo_pago,
-        // soporta pagos mixtos y evita problemas de coincidencia de strings en colección.
         $pagosQuery = DB::table('pagos')
             ->join('ventas as vp', 'vp.id', '=', 'pagos.venta_id')
             ->whereDate('vp.created_at', $fecha)
             ->where('vp.estado', '!=', 'cancelada');
 
+        if ($empresaId) {
+            $pagosQuery->where('vp.empresa_id', $empresaId);
+        }
+        if ($sucursalId) {
+            $pagosQuery->where('vp.sucursal_id', $sucursalId);
+        }
         if ($cajeroId) {
             $pagosQuery->where('vp.user_id', $cajeroId);
         }
@@ -47,8 +56,13 @@ class CortesController extends Controller
         $totalTarjeta  = (float) ($pagosPorMetodo['tarjeta'] ?? 0);
         $totalCredito  = (float) ($pagosPorMetodo['credito'] ?? 0);
 
-        // Buscar caja del día sin filtrar por estado — puede estar cerrada al hacer el corte
         $cajaQuery = DB::table('cajas')->whereDate('abierta_at', $fecha);
+        if ($empresaId) {
+            $cajaQuery->where('empresa_id', $empresaId);
+        }
+        if ($sucursalId) {
+            $cajaQuery->where('sucursal_id', $sucursalId);
+        }
         if ($cajeroId) {
             $cajaQuery->where('user_id', $cajeroId);
         }
@@ -56,20 +70,27 @@ class CortesController extends Controller
 
         $fondoInicial = $caja ? (float) $caja->fondo_inicial : 0;
 
-        // Pagos de clientes (abonos) del día
-        $pagosClientes = DB::table('abonos')
-            ->whereDate('created_at', $fecha)
-            ->sum('monto');
+        $abonosQuery = DB::table('abonos')->whereDate('created_at', $fecha);
+        if ($empresaId) {
+            $abonosQuery->where('empresa_id', $empresaId);
+        }
+        if ($sucursalId) {
+            $abonosQuery->where('sucursal_id', $sucursalId);
+        }
+        $pagosClientes = $abonosQuery->sum('monto');
 
-        // Pagos a proveedores del día (salidas de efectivo)
         $pagosProveedores = 0;
         if (DB::getSchemaBuilder()->hasTable('pagos_proveedores')) {
-            $pagosProveedores = DB::table('pagos_proveedores')
-                ->whereDate('created_at', $fecha)
-                ->sum('monto');
+            $ppQuery = DB::table('pagos_proveedores')->whereDate('created_at', $fecha);
+            if ($empresaId) {
+                $ppQuery->where('empresa_id', $empresaId);
+            }
+            if ($sucursalId) {
+                $ppQuery->where('sucursal_id', $sucursalId);
+            }
+            $pagosProveedores = $ppQuery->sum('monto');
         }
 
-        // Ventas agrupadas por proveedor (join venta_items → productos → proveedores)
         $ventasPorProveedorQuery = DB::table('venta_items')
             ->join('ventas as v2', 'v2.id', '=', 'venta_items.venta_id')
             ->join('productos', 'productos.id', '=', 'venta_items.producto_id')
@@ -77,6 +98,12 @@ class CortesController extends Controller
             ->whereDate('v2.created_at', $fecha)
             ->where('v2.estado', '!=', 'cancelada');
 
+        if ($empresaId) {
+            $ventasPorProveedorQuery->where('v2.empresa_id', $empresaId);
+        }
+        if ($sucursalId) {
+            $ventasPorProveedorQuery->where('v2.sucursal_id', $sucursalId);
+        }
         if ($cajeroId) {
             $ventasPorProveedorQuery->where('v2.user_id', $cajeroId);
         }
@@ -91,10 +118,7 @@ class CortesController extends Controller
             ->map(fn($row) => ['nombre' => $row->nombre, 'monto' => $row->monto])
             ->values();
 
-        $cajeroNombre = $cajeroId
-            ? ($ventas->first()->cajero_nombre ?? 'N/A')
-            : 'TODOS';
-
+        $cajeroNombre    = $cajeroId ? ($ventas->first()->cajero_nombre ?? 'N/A') : 'TODOS';
         $totalDineroCaja = $fondoInicial + $totalEfectivo + $pagosClientes - $pagosProveedores;
 
         return response()->json([
@@ -103,7 +127,7 @@ class CortesController extends Controller
             'hora'       => now()->format('h:i A'),
             'num_ventas' => $ventas->count(),
             'cajero'     => $cajeroNombre,
-            'caja'   => $caja->nombre ?? 'Caja Principal',
+            'caja'       => $caja->nombre ?? 'Caja Principal',
             'entradas_efectivo' => [
                 'inicio_caja'    => $fondoInicial,
                 'entrada_cambio' => 0.00,
@@ -213,7 +237,7 @@ class CortesController extends Controller
             <table>';
 
         foreach ($corte['ventas_departamento'] as $item) {
-            $html .= '<tr><td>' . $item['codigo'] . '</td><td class="right">$' . number_format($item['monto'], 2) . '</td></tr>';
+            $html .= '<tr><td>' . ($item['nombre'] ?? '') . '</td><td class="right">$' . number_format($item['monto'] ?? 0, 2) . '</td></tr>';
         }
 
         $html .= '

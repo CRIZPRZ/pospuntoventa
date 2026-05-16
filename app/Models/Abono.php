@@ -11,7 +11,7 @@ class Abono extends Model
     use HasFactory;
 
     protected $fillable = [
-        'empresa_id', 'venta_id', 'cliente_id', 'monto', 'metodo_pago', 'referencia', 'notas',
+        'empresa_id', 'sucursal_id', 'venta_id', 'cliente_id', 'monto', 'metodo_pago', 'referencia', 'notas',
     ];
 
     protected $casts = ['monto' => 'decimal:2'];
@@ -27,6 +27,9 @@ class Abono extends Model
         static::creating(function (self $model) {
             if (!$model->empresa_id && app()->bound('tenant_id')) {
                 $model->empresa_id = app('tenant_id');
+            }
+            if (!$model->sucursal_id && app()->bound('sucursal_id')) {
+                $model->sucursal_id = app('sucursal_id');
             }
         });
     }

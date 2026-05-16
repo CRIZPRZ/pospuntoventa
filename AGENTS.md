@@ -146,6 +146,13 @@ Siempre verificar que la tabla en migration y `$table` del model coincidan.
 - Implementar en `CortesController@imprimirTermico` — mismo patrón que `VentaController@imprimirTermico`.
 - `conexion_tipo === 'webusb'` nunca llega al backend (el frontend lo maneja directamente vía WebUSB API).
 
+## Multi-sucursal: tablas con empresa_id + sucursal_id
+- `cotizaciones`: empresa_id + sucursal_id → migration `2026_05_15_100001`. Unique anterior `folio` cambiado a `(empresa_id, folio)`.
+- `pagos_proveedores`: empresa_id + sucursal_id → misma migration.
+- `pedidos`: ya tenía empresa_id, se agrega sucursal_id → misma migration.
+- **IMPORTANTE**: Sin correr esta migration, cotizaciones/pedidos/pagos-proveedores dan 500 porque `applySucursalScope` usa `where('sucursal_id', ...)` que no existe.
+- `CortesController`: todas las queries raw ahora filtran por `empresa_id` (tenant) y `sucursal_id`.
+
 ## Estado del proyecto
 - [x] Estructura base Laravel 13
 - [x] Docker configurado (puertos separados del proyecto salon)
@@ -158,5 +165,6 @@ Siempre verificar que la tabla en migration y `$table` del model coincidan.
 - [x] Controllers con lógica completa para ventas
 - [x] Generación e impresión de tickets térmicos (mike42/escpos-php)
 - [x] Módulo Proveedores (CRUD + relación con productos)
+- [x] CortesController filtra por empresa_id + sucursal_id
 - [ ] Reportes (pendiente)
 - [ ] `POST /api/cortes/{id}/imprimir-termico` (pendiente — frontend ya lo llama)

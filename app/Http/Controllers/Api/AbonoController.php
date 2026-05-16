@@ -6,16 +6,20 @@ use App\Models\Abono;
 use App\Models\Venta;
 use App\Models\Cliente;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class AbonoController extends Controller
 {
+    use ScopesBySucursal;
+
     public function index(Request $request)
     {
-        $query = Abono::with(['venta', 'cliente'])
-            ->latest();
+        $query = $this->applySucursalScope(
+            Abono::with(['venta', 'cliente'])->latest()
+        );
 
         if ($request->filled('cliente_id')) {
             $query->where('cliente_id', $request->cliente_id);

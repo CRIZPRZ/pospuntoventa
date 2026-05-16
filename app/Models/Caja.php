@@ -10,7 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Caja extends Model
 {
     protected $fillable = [
-        'empresa_id', 'user_id', 'fondo_inicial', 'total_efectivo', 'total_tarjeta',
+        'empresa_id', 'sucursal_id', 'user_id', 'fondo_inicial', 'total_efectivo', 'total_tarjeta',
         'total_credito', 'total_ventas', 'efectivo_contado', 'diferencia',
         'num_transacciones', 'abierta_at', 'cerrada_at', 'cerrada_por', 'estado', 'observaciones',
     ];

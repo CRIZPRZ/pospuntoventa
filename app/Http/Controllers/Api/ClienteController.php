@@ -4,14 +4,16 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\Cliente;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 class ClienteController extends Controller
 {
+    use ScopesBySucursal;
     public function index(Request $request)
     {
-        $query = Cliente::query()->latest();
+        $query = $this->applySucursalScope(Cliente::query()->latest());
 
         if ($request->filled('q')) {
             $search = $request->string('q');
@@ -42,6 +44,7 @@ class ClienteController extends Controller
 
         $data['activo'] = $request->boolean('activo', true);
         $data['saldo_credito'] = 0;
+        $data['sucursal_id'] = $this->sucursalId();
 
         $cliente = Cliente::create($data);
 

@@ -13,7 +13,7 @@ class Pedido extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'empresa_id', 'folio', 'cotizacion_id', 'cliente_id', 'nombre_cliente',
+        'empresa_id', 'sucursal_id', 'folio', 'cotizacion_id', 'cliente_id', 'nombre_cliente',
         'email_cliente', 'vendedor_id', 'fecha', 'fecha_entrega', 'status',
         'subtotal', 'descuento', 'impuesto_pct', 'total', 'notas',
     ];
@@ -38,6 +38,9 @@ class Pedido extends Model
         static::creating(function (self $model) {
             if (!$model->empresa_id && app()->bound('tenant_id')) {
                 $model->empresa_id = app('tenant_id');
+            }
+            if (!$model->sucursal_id && app()->bound('sucursal_id')) {
+                $model->sucursal_id = app('sucursal_id');
             }
             if (!$model->folio) {
                 $model->folio = static::generarFolio($model->empresa_id);
