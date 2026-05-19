@@ -114,6 +114,16 @@ class FacturapiService
         return $response->body();
     }
 
+    public function cancelarFactura(string $orgKey, string $invoiceId, string $motive = '02'): array
+    {
+        $response = Http::withToken($orgKey)
+            ->delete(self::BASE . "/invoices/{$invoiceId}", ['motive' => $motive]);
+
+        $this->throwIfError($response, 'Error al cancelar CFDI en Facturapi');
+
+        return $response->json() ?? [];
+    }
+
     public function testOrg(string $orgKey): bool
     {
         $response = Http::withToken($orgKey)

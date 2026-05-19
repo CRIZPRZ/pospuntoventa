@@ -46,6 +46,14 @@ class VentaController extends Controller
             $query->where('estado', $request->estado);
         }
 
+        if ($request->boolean('tiene_cfdi')) {
+            $query->whereNotNull('cfdi_uuid');
+        }
+
+        if ($request->filled('cfdi_status')) {
+            $query->where('cfdi_status', $request->cfdi_status);
+        }
+
         return response()->json($query->paginate($request->integer('per_page', 50)));
     }
 

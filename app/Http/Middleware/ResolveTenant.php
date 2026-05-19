@@ -11,6 +11,10 @@ class ResolveTenant
     {
         $user = $request->user();
 
+        if ($user && $user->is_superadmin) {
+            return $next($request);
+        }
+
         if ($user && $user->empresa_id) {
             app()->instance('tenant_id', $user->empresa_id);
             app()->instance('tenant', $user->empresa);

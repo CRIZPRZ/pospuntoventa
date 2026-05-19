@@ -260,12 +260,8 @@ class FacturacionController extends Controller
         $config      = $this->getConfig();
         $facturacion = $config['facturacion'] ?? [];
 
-        if (empty($facturacion['activa'])) {
-            return response()->json(['message' => 'Facturación no activada en Configuración'], 422);
-        }
-
         if (empty($facturacion['csd_subido'])) {
-            return response()->json(['message' => 'Sube el CSD antes de facturar'], 422);
+            return response()->json(['message' => 'Sube el CSD antes de facturar (Configuración → Facturación)'], 422);
         }
 
         $orgKey = $this->orgKey();
@@ -565,6 +561,32 @@ class FacturacionController extends Controller
             'series'       => $facturacion['serie'] ?? 'A',
             'folio_number' => $folio,
         ];
+    }
+
+    public function cancelarCfdi(Request $request, Venta $venta)
+    {
+        if (!$venta->cfdi_uuid || !$venta->cfdi_facturapi_id) {
+            return response()->json(['message' => 'Esta venta no tiene CFDI generado'], 422);
+        }
+
+        if ($venta->cfdi_status === 'cancelado') {
+            return response()->json(['message' => 'El CFDI ya está cancelado'], 422);
+        }
+
+        $orgKey = $this->orgKey();
+        if (!$orgKey) {
+            return response()->json(['message' => 'Facturación no configurada'], 422);
+        }
+
+        try {
+            $this->facturapi()->cancelarFactura($orgKey, $venta->cfdi_facturapi_id, $request->input('motive', '02'));
+
+            $venta->update(['cfdi_status' => 'cancelado']);
+
+            return response()->json(['message' => 'CFDI cancelado correctamente']);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
     }
 
     private function mapFormaPago(string $tipo): string

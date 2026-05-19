@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\WelcomeMail;
 use App\Models\Empresa;
 use App\Models\Sucursal;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -23,9 +25,11 @@ class RegisterController extends Controller
 
         // Crear empresa
         $empresa = Empresa::create([
-            'nombre' => $data['empresa_nombre'],
-            'slug'   => Empresa::generarSlug($data['empresa_nombre']),
-            'email'  => $data['email'],
+            'nombre'             => $data['empresa_nombre'],
+            'slug'               => Empresa::generarSlug($data['empresa_nombre']),
+            'email'              => $data['email'],
+            'plan_estado'        => 'trial',
+            'plan_vigente_hasta' => now()->addDays(14),
         ]);
 
         // Crear rol admin para esta empresa con todos los permisos globales.
@@ -72,6 +76,13 @@ class RegisterController extends Controller
         app()->instance('tenant_id', $empresa->id);
 
         $token = $user->createToken('ventas-pos')->plainTextToken;
+
+        // Enviar email de bienvenida (en background para no bloquear el response)
+        try {
+            Mail::to($user->email)->queue(new WelcomeMail($user, $empresa->nombre));
+        } catch (\Throwable) {
+            // Silenciar si falla el mail — no romper el registro
+        }
 
         return response()->json([
             'token' => $token,

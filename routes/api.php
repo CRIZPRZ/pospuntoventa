@@ -1,5 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\SuperAdmin\EmpresaController as SuperAdminEmpresaController;
+use App\Http\Controllers\Api\SuperAdmin\PlanController as SuperAdminPlanController;
+use App\Http\Controllers\Api\BillingController;
+use App\Http\Controllers\Api\PasswordResetController;
+use App\Http\Controllers\Api\WebhookController;
 use App\Http\Controllers\Api\AbonoController;
 use App\Http\Controllers\Api\CotizacionController;
 use App\Http\Controllers\Api\PedidoController;
@@ -26,13 +31,22 @@ Route::post('register', [RegisterController::class, 'register']);
 
 Route::prefix('auth')->group(function () {
     Route::post('login', [AuthController::class, 'login']);
+    Route::post('forgot-password', [PasswordResetController::class, 'forgotPassword']);
+    Route::post('reset-password',  [PasswordResetController::class, 'resetPassword']);
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('logout', [AuthController::class, 'logout']);
         Route::get('me', [AuthController::class, 'me']);
     });
 });
 
+// Billing sin check.trial — el tenant siempre debe poder ver su plan y pagar
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('planes/mi-plan', [BillingController::class, 'miPlan']);
+    Route::post('checkout/crear-sesion', [BillingController::class, 'crearSesion']);
+    Route::post('billing/portal', [BillingController::class, 'crearPortal']);
+});
+
+Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
 
     // Dashboard
     Route::middleware('can:ver dashboard')->group(function () {
@@ -229,10 +243,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('actualizar-legal', [FacturacionController::class, 'actualizarLegal']);
         Route::post('confirmar-csd',    [FacturacionController::class, 'confirmarCsd']);
     });
-    Route::post('ventas/{venta}/facturar',         [FacturacionController::class, 'facturar']);
-    Route::post('ventas/{venta}/cfdi/reenviar',    [FacturacionController::class, 'reenviarEmail']);
-    Route::get('ventas/{venta}/cfdi/xml',          [FacturacionController::class, 'downloadXml']);
-    Route::get('ventas/{venta}/cfdi/pdf',          [FacturacionController::class, 'downloadPdf']);
+    Route::middleware('can:gestionar facturacion')->group(function () {
+        Route::post('ventas/{venta}/facturar',      [FacturacionController::class, 'facturar']);
+        Route::post('ventas/{venta}/cfdi/cancelar', [FacturacionController::class, 'cancelarCfdi']);
+        Route::post('ventas/{venta}/cfdi/reenviar', [FacturacionController::class, 'reenviarEmail']);
+    });
+    Route::middleware('can:ver facturacion')->group(function () {
+        Route::get('ventas/{venta}/cfdi/xml',       [FacturacionController::class, 'downloadXml']);
+        Route::get('ventas/{venta}/cfdi/pdf',       [FacturacionController::class, 'downloadPdf']);
+    });
 
     // Mercado Libre
     Route::prefix('mercado-libre')->group(function () {
@@ -271,6 +290,32 @@ Route::middleware('auth:sanctum')->group(function () {
         });
     });
 });
+
+// SuperAdmin — solo accesible para is_superadmin = true
+Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(function () {
+    Route::get('empresas', [SuperAdminEmpresaController::class, 'index']);
+    Route::post('empresas', [SuperAdminEmpresaController::class, 'store']);
+    Route::get('empresas/{empresa}', [SuperAdminEmpresaController::class, 'show']);
+    Route::put('empresas/{empresa}', [SuperAdminEmpresaController::class, 'update']);
+    Route::delete('empresas/{empresa}', [SuperAdminEmpresaController::class, 'destroy']);
+    Route::get('empresas/{empresa}/modulos', [SuperAdminEmpresaController::class, 'modulos']);
+    Route::post('empresas/{empresa}/modulos/toggle', [SuperAdminEmpresaController::class, 'toggleModulo']);
+    Route::post('empresas/{empresa}/modulos', [SuperAdminEmpresaController::class, 'setModulos']);
+    Route::post('empresas/{empresa}/asignar-plan', [SuperAdminEmpresaController::class, 'asignarPlan']);
+
+    // Planes CRUD
+    Route::get('planes', [SuperAdminPlanController::class, 'index']);
+    Route::post('planes', [SuperAdminPlanController::class, 'store']);
+    Route::get('planes/{plan}', [SuperAdminPlanController::class, 'show']);
+    Route::put('planes/{plan}', [SuperAdminPlanController::class, 'update']);
+    Route::delete('planes/{plan}', [SuperAdminPlanController::class, 'destroy']);
+});
+
+// Stripe Webhook — NO auth, verificación por firma
+Route::post('webhook/stripe', [WebhookController::class, 'stripe']);
+
+// Planes públicos — NO auth, para landing page
+Route::get('planes', [BillingController::class, 'planesPublicos']);
 
 // Mercado Libre OAuth callback (no auth required - ML redirects here)
 Route::get('mercado-libre/callback', [MercadoLibreController::class, 'callback'])->name('mercado-libre.callback');

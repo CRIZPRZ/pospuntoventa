@@ -42,6 +42,15 @@ class AuthController extends Controller
 
     private function formatUser($user): array
     {
+        if ($user->is_superadmin) {
+            return array_merge($user->toArray(), [
+                'is_superadmin' => true,
+                'roles'         => [],
+                'permissions'   => [],
+                'empresa'       => null,
+            ]);
+        }
+
         // Sucursales del usuario con su rol en cada una
         $sucursales = \Illuminate\Support\Facades\DB::table('usuario_sucursal as us')
             ->join('sucursales', 'sucursales.id', '=', 'us.sucursal_id')
@@ -51,12 +60,17 @@ class AuthController extends Controller
             ->select('sucursales.id', 'sucursales.nombre', 'sucursales.es_principal', 'roles.name as rol')
             ->get();
 
+        $modulos = $user->empresa
+            ? $user->empresa->modulos()->where('activo', true)->pluck('modulo_key')
+            : [];
+
         return array_merge($user->toArray(), [
-            'roles'            => $user->getRoleNames(),
-            'permissions'      => $user->getAllPermissions()->pluck('name'),
-            'empresa'          => $user->empresa?->only(['id', 'nombre', 'slug']),
-            'sucursal_activa'  => $user->sucursalDefault?->only(['id', 'nombre', 'es_principal']),
-            'sucursales'       => $sucursales,
+            'roles'              => $user->getRoleNames(),
+            'permissions'        => $user->getAllPermissions()->pluck('name'),
+            'empresa'            => $user->empresa?->only(['id', 'nombre', 'slug']),
+            'sucursal_activa'    => $user->sucursalDefault?->only(['id', 'nombre', 'es_principal']),
+            'sucursales'         => $sucursales,
+            'modulos_habilitados'=> $modulos,
         ]);
     }
 }

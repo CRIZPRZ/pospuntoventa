@@ -9,7 +9,8 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         $this->call([
-            RolesSeeder::class, // Seeds global permissions only
+            RolesSeeder::class,
+            SuperAdminSeeder::class,
         ]);
     }
 }
