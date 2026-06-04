@@ -350,14 +350,15 @@ Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(f
 // Stripe Webhook — NO auth, verificación por firma
 Route::post('webhook/stripe', [WebhookController::class, 'stripe']);
 
-// Camera Agent — autenticado con X-Agent-Token, sin sanctum
-Route::prefix('agent')->group(function () {
-    Route::get('config',     [AgentController::class, 'config']);
-    Route::post('register',  [AgentController::class, 'register']);
-    Route::post('heartbeat', [AgentController::class, 'heartbeat']);
-    Route::get('install.sh', [AgentController::class, 'installSh']);
-    Route::get('install.ps1',[AgentController::class, 'installPs1']);
-});
+// Camera Agent — autenticado con X-Agent-Token, sin sanctum ni tenant middleware
+Route::withoutMiddleware([\App\Http\Middleware\ResolveTenant::class, \App\Http\Middleware\ResolveSucursal::class])
+    ->prefix('agent')->group(function () {
+        Route::get('config',      [AgentController::class, 'config']);
+        Route::post('register',   [AgentController::class, 'register']);
+        Route::post('heartbeat',  [AgentController::class, 'heartbeat']);
+        Route::get('install.sh',  [AgentController::class, 'installSh']);
+        Route::get('install.ps1', [AgentController::class, 'installPs1']);
+    });
 
 // Planes públicos — NO auth, para landing page
 Route::get('planes', [BillingController::class, 'planesPublicos']);
