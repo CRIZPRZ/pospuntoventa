@@ -13,10 +13,12 @@ class Empresa extends Model
         'nombre', 'slug', 'email', 'status',
         'plan_id', 'plan_vigente_hasta', 'plan_estado',
         'plan_precio_pactado', 'stripe_customer_id', 'stripe_subscription_id',
+        'datos_facturacion', 'timbres_extra',
     ];
 
     protected $casts = [
-        'plan_vigente_hasta' => 'datetime',
+        'plan_vigente_hasta'  => 'datetime',
+        'datos_facturacion'   => 'array',
     ];
 
     public static function generarSlug(string $nombre): string

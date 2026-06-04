@@ -2,35 +2,34 @@
 
 namespace App\Mail;
 
-use App\Models\User;
+use App\Models\Empresa;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class WelcomeMail extends Mailable
+class SuscripcionCanceladaMail extends Mailable
 {
     use Queueable, SerializesModels;
 
     public function __construct(
-        public User $user,
-        public string $empresaNombre,
-        public int $diasTrial = 14,
-        public array $modulos = [],
+        public Empresa $empresa,
+        public string  $planNombre,
+        public ?string $vigenciaHasta = null,
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: "¡Bienvenido a Ventas POS, {$this->empresaNombre}!",
+            subject: "Tu suscripción a Ventas POS ha sido cancelada",
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.welcome',
+            view: 'emails.suscripcion-cancelada',
         );
     }
 }

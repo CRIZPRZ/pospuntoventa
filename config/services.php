@@ -53,4 +53,10 @@ return [
         'webhook_secret'  => env('STRIPE_WEBHOOK_SECRET'),
     ],
 
+    'mediamtx' => [
+        'hls_url'  => env('MEDIAMTX_HLS_URL', 'http://localhost:8888'),
+        'rtsp_url' => env('MEDIAMTX_RTSP_URL', 'rtsp://localhost:8554'),
+        'api_url'  => env('MEDIAMTX_API_URL', 'http://localhost:9997'),
+    ],
+
 ];

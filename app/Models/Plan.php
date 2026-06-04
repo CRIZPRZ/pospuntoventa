@@ -11,7 +11,7 @@ class Plan extends Model
 
     protected $fillable = [
         'nombre', 'descripcion', 'precio_mensual',
-        'max_sucursales', 'max_usuarios', 'modulos',
+        'max_sucursales', 'max_usuarios', 'timbres_incluidos', 'modulos',
         'color', 'stripe_price_id', 'stripe_price_id_anual', 'activo', 'tipo',
     ];
 

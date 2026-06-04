@@ -56,6 +56,19 @@ services:
     networks:
       - ventas-network
 
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: ventas-mediamtx
+    ports:
+      - "8888:8888"   # HLS  → browser
+      - "8554:8554"   # RTSP interno
+      - "9997:9997"   # API  → Laravel auto-config
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+    restart: unless-stopped
+    networks:
+      - ventas-network
+
   queue-worker:
     build:
       context: .

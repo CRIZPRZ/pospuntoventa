@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\SuperAdmin\EmpresaController as SuperAdminEmpresaController;
 use App\Http\Controllers\Api\SuperAdmin\PlanController as SuperAdminPlanController;
+use App\Http\Controllers\Api\SuperAdmin\ConfigFiscalController as SuperAdminConfigFiscalController;
+use App\Http\Controllers\Api\SuscripcionFacturaController;
 use App\Http\Controllers\Api\BillingController;
 use App\Http\Controllers\Api\PasswordResetController;
 use App\Http\Controllers\Api\WebhookController;
@@ -25,6 +27,8 @@ use App\Http\Controllers\Api\PagoProveedorController;
 use App\Http\Controllers\Api\RolPermisoController;
 use App\Http\Controllers\Api\FacturacionController;
 use App\Http\Controllers\Api\SucursalController;
+use App\Http\Controllers\Api\CamaraController;
+use App\Http\Controllers\Api\AgentController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('register', [RegisterController::class, 'register']);
@@ -42,8 +46,16 @@ Route::prefix('auth')->group(function () {
 // Billing sin check.trial — el tenant siempre debe poder ver su plan y pagar
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('planes/mi-plan', [BillingController::class, 'miPlan']);
+    Route::get('billing/invoices', [BillingController::class, 'invoices']);
+    Route::post('billing/invoices/{stripeInvoiceId}/solicitar-factura', [SuscripcionFacturaController::class, 'solicitar']);
+    Route::post('billing/invoices/{stripeInvoiceId}/auto-facturar', [SuscripcionFacturaController::class, 'autoFacturar']);
+    Route::get('billing/invoices/{stripeInvoiceId}/factura', [SuscripcionFacturaController::class, 'show']);
+    Route::get('billing/invoices/{stripeInvoiceId}/factura/xml', [SuscripcionFacturaController::class, 'downloadXml']);
+    Route::get('billing/invoices/{stripeInvoiceId}/factura/pdf', [SuscripcionFacturaController::class, 'downloadPdf']);
     Route::post('checkout/crear-sesion', [BillingController::class, 'crearSesion']);
+    Route::post('billing/cambiar-plan', [BillingController::class, 'cambiarPlan']);
     Route::post('billing/portal', [BillingController::class, 'crearPortal']);
+    Route::post('billing/comprar-timbres', [BillingController::class, 'comprarTimbres']);
 });
 
 Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
@@ -227,6 +239,21 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('sucursales/{sucursal}/importar-catalogo', [SucursalController::class, 'importarCatalogo']);
     });
 
+    // Cámaras
+    Route::middleware('can:ver camaras')->group(function () {
+        Route::get('camaras', [CamaraController::class, 'index']);
+        Route::get('camaras/{camara}/stream', [CamaraController::class, 'streamUrl']);
+    });
+    Route::middleware('can:gestionar camaras')->group(function () {
+        Route::post('camaras/test-connection', [CamaraController::class, 'testConnection']);
+        Route::post('camaras/snapshot-venta', [CamaraController::class, 'snapshotVenta']);
+        Route::post('camaras', [CamaraController::class, 'store']);
+        Route::put('camaras/{camara}', [CamaraController::class, 'update']);
+        Route::delete('camaras/{camara}', [CamaraController::class, 'destroy']);
+        Route::post('camaras/{camara}/test', [CamaraController::class, 'testSaved']);
+        Route::post('camaras/{camara}/snapshot', [CamaraController::class, 'snapshot']);
+    });
+
     // Roles y permisos
     Route::middleware('can:gestionar roles')->group(function () {
         Route::apiResource('roles', RolPermisoController::class)->except(['show']);
@@ -302,6 +329,15 @@ Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(f
     Route::post('empresas/{empresa}/modulos/toggle', [SuperAdminEmpresaController::class, 'toggleModulo']);
     Route::post('empresas/{empresa}/modulos', [SuperAdminEmpresaController::class, 'setModulos']);
     Route::post('empresas/{empresa}/asignar-plan', [SuperAdminEmpresaController::class, 'asignarPlan']);
+    Route::post('empresas/{empresa}/facturar-manual', [SuscripcionFacturaController::class, 'facturarManual']);
+
+    // Config fiscal del superadmin (para emitir CFDIs de suscripciones)
+    Route::get('config-fiscal', [SuperAdminConfigFiscalController::class, 'show']);
+    Route::post('config-fiscal', [SuperAdminConfigFiscalController::class, 'update']);
+    Route::post('config-fiscal/setup-facturapi', [SuperAdminConfigFiscalController::class, 'setupFacturapi']);
+    Route::post('config-fiscal/upload-csd', [SuperAdminConfigFiscalController::class, 'uploadCsd']);
+    Route::post('config-fiscal/test', [SuperAdminConfigFiscalController::class, 'test']);
+    Route::delete('config-fiscal/reset', [SuperAdminConfigFiscalController::class, 'reset']);
 
     // Planes CRUD
     Route::get('planes', [SuperAdminPlanController::class, 'index']);
@@ -313,6 +349,15 @@ Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(f
 
 // Stripe Webhook — NO auth, verificación por firma
 Route::post('webhook/stripe', [WebhookController::class, 'stripe']);
+
+// Camera Agent — autenticado con X-Agent-Token, sin sanctum
+Route::prefix('agent')->group(function () {
+    Route::get('config',     [AgentController::class, 'config']);
+    Route::post('register',  [AgentController::class, 'register']);
+    Route::post('heartbeat', [AgentController::class, 'heartbeat']);
+    Route::get('install.sh', [AgentController::class, 'installSh']);
+    Route::get('install.ps1',[AgentController::class, 'installPs1']);
+});
 
 // Planes públicos — NO auth, para landing page
 Route::get('planes', [BillingController::class, 'planesPublicos']);

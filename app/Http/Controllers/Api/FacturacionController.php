@@ -9,6 +9,7 @@ use App\Services\FacturapiService;
 use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -255,6 +256,36 @@ class FacturacionController extends Controller
 
         if ($venta->estado === 'cancelada') {
             return response()->json(['message' => 'No se puede facturar una venta cancelada'], 422);
+        }
+
+        // Verificar límite de timbres del plan (superadmin siempre puede)
+        if (! $request->user()->is_superadmin) {
+            $empresa          = $request->user()->empresa;
+            $timbresIncluidos = $empresa?->plan?->timbres_incluidos ?? 0;
+            $timbresExtra     = (int) ($empresa?->timbres_extra ?? 0);
+
+            if ($timbresIncluidos !== -1) { // -1 = ilimitado
+                $timbresUsados = DB::table('ventas')
+                    ->where('empresa_id', $this->empresaId())
+                    ->whereNotNull('cfdi_uuid')
+                    ->whereYear('created_at', now()->year)
+                    ->whereMonth('created_at', now()->month)
+                    ->count();
+
+                if ($timbresUsados >= $timbresIncluidos) {
+                    // Cuota mensual agotada — consumir timbres_extra si hay
+                    if ($timbresExtra > 0) {
+                        $empresa->decrement('timbres_extra');
+                    } else {
+                        return response()->json([
+                            'message'          => "Límite de timbres alcanzado ({$timbresUsados}/{$timbresIncluidos} este mes). Compra timbres adicionales en Mi Plan.",
+                            'timbres_usados'   => $timbresUsados,
+                            'timbres_incluidos'=> $timbresIncluidos,
+                            'timbres_extra'    => 0,
+                        ], 422);
+                    }
+                }
+            }
         }
 
         $config      = $this->getConfig();

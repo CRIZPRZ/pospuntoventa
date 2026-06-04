@@ -33,19 +33,24 @@
   <p style="margin:0 0 16px;font-size:14px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.05em;">
     ¿Qué puedes hacer hoy?
   </p>
-  @foreach([
-    ['🛒', 'Registra tu primera venta', 'Abre el Punto de Venta y cobra en segundos'],
-    ['📦', 'Agrega tus productos', 'Importa desde Excel o crea uno a uno'],
-    ['🧾', 'Configura tu facturación CFDI', 'Conecta tu CSD y timbra facturas'],
-    ['🏪', 'Configura tu empresa', 'Logo, datos fiscales y diseño del ticket'],
-  ] as [$icon, $title, $desc])
-  <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:12px;">
-    <span style="font-size:20px;width:28px;flex-shrink:0;">{{ $icon }}</span>
-    <div>
-      <p style="margin:0;font-size:14px;font-weight:600;color:#111827;">{{ $title }}</p>
-      <p style="margin:2px 0 0;font-size:13px;color:#6b7280;">{{ $desc }}</p>
+  @php
+    $pasos = [
+      ['🛒', 'Registra tu primera venta',    'Abre el Punto de Venta y cobra en segundos', null],
+      ['📦', 'Agrega tus productos',          'Importa desde Excel o crea uno a uno',       'productos'],
+      ['🧾', 'Configura tu facturación CFDI', 'Conecta tu CSD y timbra facturas',           'facturacion'],
+      ['🏪', 'Configura tu empresa',          'Logo, datos fiscales y diseño del ticket',   'configuracion'],
+    ];
+  @endphp
+  @foreach($pasos as [$icon, $title, $desc, $requiere])
+    @if(!$requiere || in_array($requiere, $modulos))
+    <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:12px;">
+      <span style="font-size:20px;width:28px;flex-shrink:0;">{{ $icon }}</span>
+      <div>
+        <p style="margin:0;font-size:14px;font-weight:600;color:#111827;">{{ $title }}</p>
+        <p style="margin:2px 0 0;font-size:13px;color:#6b7280;">{{ $desc }}</p>
+      </div>
     </div>
-  </div>
+    @endif
   @endforeach
 </div>
 

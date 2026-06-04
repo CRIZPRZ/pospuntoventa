@@ -1,0 +1,22 @@
+hlsAddress: :8888
+hlsAlwaysRemux: yes
+hlsEncryption: no
+rtspAddress: :8554
+api: yes
+apiAddress: :9997
+logLevel: warn
+
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass: ""
+    ips: []
+    permissions:
+      - action: api
+        path: ""
+      - action: read
+        path: ""
+      - action: publish
+        path: ""
+
+paths: {}

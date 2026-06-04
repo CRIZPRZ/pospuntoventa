@@ -13,11 +13,13 @@ class Sucursal extends Model
     protected $table = 'sucursales';
     protected $fillable = [
         'empresa_id', 'nombre', 'direccion', 'telefono', 'ciudad', 'es_principal', 'activo', 'modo_caja',
+        'mediamtx_url', 'agent_token', 'agent_version', 'agent_last_seen',
     ];
 
     protected $casts = [
-        'es_principal' => 'boolean',
-        'activo'       => 'boolean',
+        'es_principal'    => 'boolean',
+        'activo'          => 'boolean',
+        'agent_last_seen' => 'datetime',
     ];
 
     protected static function booted(): void

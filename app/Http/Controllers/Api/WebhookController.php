@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\SuscripcionCanceladaMail;
 use App\Models\Empresa;
 use App\Models\Plan;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Stripe\Stripe;
 use Stripe\Webhook;
 use Stripe\Exception\SignatureVerificationException;
@@ -42,21 +44,37 @@ class WebhookController extends Controller
 
     private function handleCheckoutCompleted($session): void
     {
-        // Activar plan tras checkout exitoso
-        $customerId    = $session->customer;
-        $subscriptionId = $session->subscription;
-        $metadata       = $session->subscription_data->metadata ?? null;
-
+        $metadata  = $session->metadata ?? null;
         $empresaId = $metadata?->empresa_id ?? null;
-        $planId    = $metadata?->plan_id ?? null;
 
-        if (! $empresaId || ! $planId) return;
+        if (! $empresaId) return;
+
+        // Paquete de timbres — one-time payment
+        if (($metadata?->type ?? '') === 'timbres') {
+            $empresa  = Empresa::find($empresaId);
+            $cantidad = (int) ($metadata?->cantidad ?? 0);
+            if ($empresa && $cantidad > 0) {
+                $empresa->increment('timbres_extra', $cantidad);
+                Log::info("Timbres +{$cantidad} acreditados a empresa {$empresa->nombre}");
+            }
+            return;
+        }
+
+        // Activar plan tras checkout de suscripción
+        $customerId     = $session->customer;
+        $subscriptionId = $session->subscription;
+        $subMeta        = $session->subscription_data->metadata ?? null;
+
+        $planId            = $metadata?->plan_id    ?? $subMeta?->plan_id    ?? null;
+        $billingPeriodMeta = $metadata?->billing_period ?? $subMeta?->billing_period ?? null;
+
+        if (! $planId) return;
 
         $empresa = Empresa::find($empresaId);
         $plan    = Plan::find($planId);
         if (! $empresa || ! $plan) return;
 
-        $billingPeriod = $metadata?->billing_period ?? 'mensual';
+        $billingPeriod = $billingPeriodMeta ?? 'mensual';
         $vigencia = $billingPeriod === 'anual' ? now()->addYear() : now()->addMonth();
 
         $empresa->update([
@@ -67,7 +85,6 @@ class WebhookController extends Controller
             'plan_vigente_hasta'     => $vigencia,
         ]);
 
-        // Sincronizar módulos
         $this->sincronizarModulos($empresa, $plan);
 
         Log::info("Plan {$plan->nombre} activado para empresa {$empresa->nombre}");
@@ -107,10 +124,27 @@ class WebhookController extends Controller
         $empresa    = Empresa::where('stripe_customer_id', $customerId)->first();
         if (! $empresa) return;
 
+        $planNombre    = $empresa->plan?->nombre ?? 'tu plan';
+        $vigenciaHasta = $subscription->current_period_end
+            ? \Carbon\Carbon::createFromTimestamp($subscription->current_period_end)
+                ->locale('es')->isoFormat('D [de] MMMM [de] YYYY')
+            : null;
+
         $empresa->update([
             'plan_estado'            => 'vencido',
             'stripe_subscription_id' => null,
         ]);
+
+        // Email al admin de la empresa
+        try {
+            $adminUser = $empresa->usuarios()->first();
+            if ($adminUser) {
+                Mail::to($adminUser->email)
+                    ->queue(new SuscripcionCanceladaMail($empresa, $planNombre, $vigenciaHasta));
+            }
+        } catch (\Throwable $e) {
+            Log::error("Error enviando email cancelación — empresa {$empresa->id}: {$e->getMessage()}");
+        }
 
         Log::info("Suscripción cancelada — empresa {$empresa->nombre}");
     }

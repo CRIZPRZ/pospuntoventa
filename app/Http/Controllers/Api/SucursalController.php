@@ -25,12 +25,14 @@ class SucursalController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'nombre'    => 'required|string|max:120',
-            'direccion' => 'nullable|string|max:255',
-            'telefono'  => 'nullable|string|max:30',
-            'ciudad'    => 'nullable|string|max:100',
+            'nombre'       => 'required|string|max:120',
+            'direccion'    => 'nullable|string|max:255',
+            'telefono'     => 'nullable|string|max:30',
+            'ciudad'       => 'nullable|string|max:100',
+            'mediamtx_url' => 'nullable|url|max:255',
         ]);
 
+        $data['agent_token'] = \Illuminate\Support\Str::random(48);
         $sucursal = Sucursal::create($data);
 
         // Auto-asignar al admin actual con rol admin en la nueva sucursal
@@ -54,12 +56,13 @@ class SucursalController extends Controller
     public function update(Request $request, Sucursal $sucursal)
     {
         $data = $request->validate([
-            'nombre'     => 'sometimes|string|max:120',
-            'direccion'  => 'nullable|string|max:255',
-            'telefono'   => 'nullable|string|max:30',
-            'ciudad'     => 'nullable|string|max:100',
-            'activo'     => 'sometimes|boolean',
-            'modo_caja'  => 'sometimes|in:individual,compartida',
+            'nombre'       => 'sometimes|string|max:120',
+            'direccion'    => 'nullable|string|max:255',
+            'telefono'     => 'nullable|string|max:30',
+            'ciudad'       => 'nullable|string|max:100',
+            'activo'       => 'sometimes|boolean',
+            'modo_caja'    => 'sometimes|in:individual,compartida',
+            'mediamtx_url' => 'nullable|url|max:255',
         ]);
 
         $sucursal->update($data);

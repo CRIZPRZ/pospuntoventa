@@ -29,6 +29,7 @@ class RolesSeeder extends Seeder
             'ver sucursales', 'gestionar sucursales',
             'ver mercado libre', 'gestionar mercado libre',
             'ver facturacion', 'gestionar facturacion',
+            'ver camaras', 'gestionar camaras',
         ];
 
         foreach ($permissions as $permission) {
