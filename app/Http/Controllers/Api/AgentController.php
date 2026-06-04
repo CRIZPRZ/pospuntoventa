@@ -75,4 +75,24 @@ class AgentController extends Controller
         $sucursal->update(['agent_last_seen' => now()]);
         return response()->json(['ok' => true]);
     }
+
+    /** Sirve el script de instalación para Mac/Linux */
+    public function installSh()
+    {
+        $path = public_path('agent/install.sh');
+        if (!file_exists($path)) {
+            abort(404, 'Script no encontrado. Despliega el código primero.');
+        }
+        return response()->file($path, ['Content-Type' => 'text/plain']);
+    }
+
+    /** Sirve el script de instalación para Windows (PowerShell) */
+    public function installPs1()
+    {
+        $path = public_path('agent/install.ps1');
+        if (!file_exists($path)) {
+            abort(404, 'Script no encontrado. Despliega el código primero.');
+        }
+        return response()->file($path, ['Content-Type' => 'text/plain']);
+    }
 }

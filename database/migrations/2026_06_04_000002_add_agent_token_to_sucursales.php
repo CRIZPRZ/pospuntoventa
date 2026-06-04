@@ -16,7 +16,7 @@ return new class extends Migration
         });
 
         // Generar token para sucursales existentes
-        \DB::table('sucursales')->whereNull('agent_token')->each(function ($s) {
+        \DB::table('sucursales')->whereNull('agent_token')->orderBy('id')->each(function ($s) {
             \DB::table('sucursales')
                 ->where('id', $s->id)
                 ->update(['agent_token' => Str::random(48)]);
