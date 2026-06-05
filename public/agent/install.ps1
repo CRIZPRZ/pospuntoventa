@@ -115,6 +115,7 @@ function Write-MtxConfig($cfg) {
     $yml = @"
 hlsAddress: :8888
 hlsAlwaysRemux: yes
+hlsAllowOrigin: '*'
 rtspAddress: :8554
 webrtcAddress: :18889
 api: yes

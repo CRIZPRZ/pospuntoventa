@@ -152,6 +152,7 @@ print(paths)
   cat > "$MTX_CFG" << CONF
 hlsAddress: :8888
 hlsAlwaysRemux: yes
+hlsAllowOrigin: '*'
 rtspAddress: :8554
 webrtcAddress: :18889
 api: yes
