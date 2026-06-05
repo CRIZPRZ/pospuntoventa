@@ -9,7 +9,7 @@
 # ============================================================
 param([string]$Token = "")
 
-$API_BASE   = $env:VENTAS_API ?? "https://api.eventpos.online/api"
+$API_BASE   = if ($env:VENTAS_API) { $env:VENTAS_API } else { "https://api.eventpos.online/api" }
 $AgentDir   = "$env:USERPROFILE\.ventas-agent"
 $MTX_VER    = "v1.12.2"
 $TaskName   = "VentasPOS-CameraAgent"
