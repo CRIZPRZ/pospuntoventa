@@ -27,6 +27,9 @@ Write-Host "  +==========================================+" -ForegroundColor Cya
 Write-Host ""
 
 # ── Token ────────────────────────────────────────────────────
+if (-not $Token -and $env:AGENT_TOKEN) {
+    $Token = $env:AGENT_TOKEN
+}
 if (-not $Token) {
     $Token = Read-Host "  Ingresa tu token de agente"
 }
