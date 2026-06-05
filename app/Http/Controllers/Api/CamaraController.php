@@ -177,6 +177,11 @@ class CamaraController extends Controller
 
                 if (!$host) return [false, 'URL RTSP inválida'];
 
+                // IP privada → no testeable desde el servidor, pero el agente local sí puede conectar
+                if (preg_match('/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/', $host)) {
+                    return [true, "IP local ({$host}) — prueba no disponible desde el servidor. El agente en tu red local se conectará automáticamente."];
+                }
+
                 // Preferir ffprobe si está instalado
                 $ffprobe = trim(shell_exec('which ffprobe 2>/dev/null') ?? '');
                 if ($ffprobe) {
