@@ -82,14 +82,19 @@ fi
 CF_BIN="$AGENT_DIR/cloudflared"
 if [ ! -f "$CF_BIN" ]; then
   info "Descargando cloudflared..."
+  CF_VER="2025.5.0"
   case "${OS_SLUG}_${ARCH_SLUG}" in
-    darwin_amd64)   CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64" ;;
-    darwin_arm64)   CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64" ;;
-    linux_amd64)    CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"  ;;
-    linux_arm64v8)  CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"  ;;
+    darwin_amd64)   CF_URL="https://github.com/cloudflare/cloudflared/releases/download/${CF_VER}/cloudflared-darwin-amd64.tgz" ; CF_TGZ=1 ;;
+    darwin_arm64)   CF_URL="https://github.com/cloudflare/cloudflared/releases/download/${CF_VER}/cloudflared-darwin-arm64.tgz" ; CF_TGZ=1 ;;
+    linux_amd64)    CF_URL="https://github.com/cloudflare/cloudflared/releases/download/${CF_VER}/cloudflared-linux-amd64"       ; CF_TGZ=0 ;;
+    linux_arm64v8)  CF_URL="https://github.com/cloudflare/cloudflared/releases/download/${CF_VER}/cloudflared-linux-arm64"       ; CF_TGZ=0 ;;
     *) error "No hay cloudflared para $OS_SLUG/$ARCH_SLUG" ;;
   esac
-  curl -sL "$CF_URL" -o "$CF_BIN"
+  if [ "$CF_TGZ" = "1" ]; then
+    curl -sL "$CF_URL" | tar xz -C "$AGENT_DIR" cloudflared
+  else
+    curl -sL "$CF_URL" -o "$CF_BIN"
+  fi
   chmod +x "$CF_BIN"
   [ "$OS" = "darwin" ] && xattr -d com.apple.quarantine "$CF_BIN" 2>/dev/null || true
   info "cloudflared instalado"
