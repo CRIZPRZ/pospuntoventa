@@ -52,8 +52,9 @@ class Camara extends Model
             $host   = $parsed['host'] ?? '';
             $port   = isset($parsed['port']) ? ":{$parsed['port']}" : '';
             $path   = $parsed['path'] ?? '';
+            $query  = isset($parsed['query']) ? "?{$parsed['query']}" : '';
             $creds  = urlencode($this->usuario) . ':' . urlencode($this->password ?? '') . '@';
-            return "{$scheme}://{$creds}{$host}{$port}{$path}";
+            return "{$scheme}://{$creds}{$host}{$port}{$path}{$query}";
         }
 
         return $this->url_rtsp;
