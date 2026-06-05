@@ -113,6 +113,7 @@ function Write-MtxConfig($cfg) {
 hlsAddress: :8888
 hlsAlwaysRemux: yes
 rtspAddress: :8554
+webrtcAddress: :18889
 api: yes
 apiAddress: :9997
 logLevel: warn
