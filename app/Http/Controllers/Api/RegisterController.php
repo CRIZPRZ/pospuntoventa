@@ -77,6 +77,7 @@ class RegisterController extends Controller
             'nombre'       => 'Sucursal Principal',
             'es_principal' => true,
             'activo'       => true,
+            'agent_token'  => \Illuminate\Support\Str::random(48),
         ]);
 
         // Crear usuario admin ligado a la empresa y sucursal principal

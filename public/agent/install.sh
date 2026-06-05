@@ -47,15 +47,21 @@ echo "$API_BASE"    > "$AGENT_DIR/api_base"
 # ── Detectar OS y arquitectura ────────────────────────────────
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
-case "$ARCH" in
-  x86_64|amd64) ARCH_SLUG="amd64" ;;
-  arm64|aarch64) ARCH_SLUG="arm64v8" ;;
-  *) error "Arquitectura no soportada: $ARCH" ;;
-esac
 case "$OS" in
   darwin) OS_SLUG="darwin" ;;
   linux)  OS_SLUG="linux"  ;;
   *) error "OS no soportado: $OS" ;;
+esac
+# MediaMTX usa "arm64v8" en Linux pero "arm64" en macOS
+case "$ARCH" in
+  x86_64|amd64) ARCH_SLUG="amd64" ;;
+  arm64|aarch64)
+    if [ "$OS_SLUG" = "darwin" ]; then
+      ARCH_SLUG="arm64"
+    else
+      ARCH_SLUG="arm64v8"
+    fi ;;
+  *) error "Arquitectura no soportada: $ARCH" ;;
 esac
 
 # ── Descargar MediaMTX ────────────────────────────────────────
