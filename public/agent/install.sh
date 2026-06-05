@@ -84,7 +84,7 @@ if [ ! -f "$CF_BIN" ]; then
   info "Descargando cloudflared..."
   case "${OS_SLUG}_${ARCH_SLUG}" in
     darwin_amd64)   CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64" ;;
-    darwin_arm64v8) CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64" ;;
+    darwin_arm64)   CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64" ;;
     linux_amd64)    CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"  ;;
     linux_arm64v8)  CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64"  ;;
     *) error "No hay cloudflared para $OS_SLUG/$ARCH_SLUG" ;;
