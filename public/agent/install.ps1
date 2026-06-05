@@ -188,6 +188,20 @@ function Start-Tunnel {
 }
 
 Log "=== Ventas POS Camera Agent iniciando ==="
+Log "Esperando conexion a internet..."
+$waited = 0
+while ($true) {
+    try {
+        $headers = @{ "X-Agent-Token" = $Token.Trim() }
+        Invoke-RestMethod -Uri "$($ApiBase.Trim())/agent/config" -Headers $headers | Out-Null
+        break
+    } catch {
+        Start-Sleep 10
+        $waited += 10
+        if ($waited -ge 120) { Log "WARN: Sin internet tras 2 min, reintentando..."; $waited = 0 }
+    }
+}
+Log "Red disponible. Iniciando..."
 $cfg = Get-AgentConfig
 Write-MtxConfig $cfg
 Start-Mediamtx

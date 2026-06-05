@@ -221,8 +221,19 @@ start_tunnel() {
   return 0
 }
 
-# ── Main loop ─────────────────────────────────────────────────
+# ── Esperar red antes de iniciar ─────────────────────────────
 log "=== Ventas POS Camera Agent iniciando ==="
+log "Esperando conexión a internet..."
+WAIT=0
+until curl -sf --max-time 5 "$API_BASE/agent/config" \
+    -H "X-Agent-Token: $AGENT_TOKEN" > /dev/null 2>&1; do
+  sleep 10
+  WAIT=$((WAIT+10))
+  [ $WAIT -ge 120 ] && log "WARN: Sin internet tras 2 min, reintentando..." && WAIT=0
+done
+log "Red disponible. Iniciando..."
+
+# ── Main loop ─────────────────────────────────────────────────
 generate_config && start_mediamtx && start_tunnel
 
 LAST_CONFIG_CHECK=0
