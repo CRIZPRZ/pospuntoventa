@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
+use App\Models\Cliente;
 use App\Models\Pedido;
 use App\Models\PedidoItem;
+use App\Services\WhatsAppService;
 use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
 
@@ -213,6 +215,159 @@ class PedidoController extends Controller
             \Illuminate\Support\Facades\Log::error('Error enviando recordatorio: ' . $e->getMessage());
             return response()->json(['message' => 'Error al enviar: ' . $e->getMessage()], 500);
         }
+    }
+
+    public function enviarWhatsApp(Request $request, Pedido $pedido)
+    {
+        $data = $request->validate([
+            'cliente_id' => ['nullable', 'integer'],
+            'telefono'   => ['nullable', 'string', 'max:30'],
+        ]);
+
+        $pedido->load(['items']);
+
+        $telefono = null;
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            // Use explicitly provided phone; fallback to stored client phone
+            $telefono = !empty($data['telefono']) ? $data['telefono'] : $cliente?->telefono;
+            if (!$pedido->cliente_id) {
+                $pedido->update(['cliente_id' => $data['cliente_id']]);
+            }
+            // Always persist the corrected phone on the client
+            if (!empty($data['telefono']) && $cliente) {
+                $cliente->update(['telefono' => $data['telefono']]);
+            }
+        } elseif (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+            if ($pedido->cliente_id) {
+                Cliente::withoutGlobalScopes()
+                    ->where('id', $pedido->cliente_id)
+                    ->update(['telefono' => $telefono]);
+            }
+        }
+
+        if (!$telefono) {
+            return response()->json(['message' => 'No se encontró número de teléfono.'], 422);
+        }
+
+        $svc = app(WhatsAppService::class);
+        $sucursalId = $pedido->sucursal_id ? (int) $pedido->sucursal_id : null;
+        $publicConfig = $svc->resolvePublicConfig((int) $pedido->empresa_id, $sucursalId);
+        $technicalConfig = $svc->resolveTechnicalConfig((int) $pedido->empresa_id, $sucursalId);
+
+        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
+            return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
+        }
+
+        $businessName = $technicalConfig->display_name
+            ?: $technicalConfig->business_name
+            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+
+        $itemLines = $pedido->items->take(5)->map(function ($item) {
+            return '▸ ' . ($item->descripcion ?? $item->nombre_producto ?? '—') . ' × ' . (int) $item->cantidad
+                . ' — $' . number_format((float) ($item->precio_unitario * $item->cantidad), 2);
+        })->implode("\n");
+
+        if ($pedido->items->count() > 5) {
+            $itemLines .= "\n▸ _y " . ($pedido->items->count() - 5) . ' producto(s) más_';
+        }
+
+        $entrega = $pedido->fecha_entrega
+            ? '📅 *Entrega:* ' . (is_string($pedido->fecha_entrega) ? $pedido->fecha_entrega : $pedido->fecha_entrega->format('d/m/Y'))
+            : null;
+
+        $body = implode("\n", array_filter([
+            "🛒 *Pedido confirmado — {$businessName}*",
+            '',
+            "🔖 *Folio:* {$pedido->folio}",
+            '💰 *Total:* $' . number_format((float) $pedido->total, 2),
+            $entrega,
+            '',
+            '*Productos:*',
+            $itemLines,
+        ]));
+
+        $ticketUrl = $pedido->ticket_token
+            ? url('/t/pedido/' . $pedido->ticket_token)
+            : null;
+
+        try {
+            if ($ticketUrl) {
+                $svc->sendTicketMessage($technicalConfig, $telefono, $body, $ticketUrl, 'Ver pedido completo');
+            } else {
+                $svc->sendTextMessage($technicalConfig, $telefono, $body);
+            }
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Pedido enviado por WhatsApp.']);
+    }
+
+    public function recordarWhatsApp(Request $request, Pedido $pedido)
+    {
+        $data = $request->validate([
+            'cliente_id' => ['nullable', 'integer'],
+            'telefono'   => ['nullable', 'string', 'max:30'],
+        ]);
+
+        $telefono = null;
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            $telefono = !empty($data['telefono']) ? $data['telefono'] : $cliente?->telefono;
+            if (!empty($data['telefono']) && $cliente) {
+                $cliente->update(['telefono' => $data['telefono']]);
+            }
+        } elseif (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+        }
+
+        if (!$telefono) {
+            return response()->json(['message' => 'No se encontró número de teléfono.'], 422);
+        }
+
+        $svc = app(WhatsAppService::class);
+        $sucursalId = $pedido->sucursal_id ? (int) $pedido->sucursal_id : null;
+        $publicConfig = $svc->resolvePublicConfig((int) $pedido->empresa_id, $sucursalId);
+        $technicalConfig = $svc->resolveTechnicalConfig((int) $pedido->empresa_id, $sucursalId);
+
+        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
+            return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
+        }
+
+        $businessName = $technicalConfig->display_name
+            ?: $technicalConfig->business_name
+            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+
+        $config  = $this->getConfig();
+        $empresa = $config['empresa'] ?? [];
+
+        $body = implode("\n", array_filter([
+            "🔔 *¡Tu pedido está listo para recoger!*",
+            '',
+            "🏪 *{$businessName}*",
+            "🔖 *Pedido:* {$pedido->folio}",
+            '💰 *Total:* $' . number_format((float) $pedido->total, 2),
+            !empty($empresa['direccion']) ? '📍 ' . $empresa['direccion'] : null,
+            !empty($empresa['telefono'])  ? '📞 ' . $empresa['telefono']  : null,
+        ]));
+
+        $ticketUrl = $pedido->ticket_token
+            ? url('/t/pedido/' . $pedido->ticket_token)
+            : null;
+
+        try {
+            if ($ticketUrl) {
+                $svc->sendTicketMessage($technicalConfig, $telefono, $body, $ticketUrl, 'Ver pedido completo');
+            } else {
+                $svc->sendTextMessage($technicalConfig, $telefono, $body);
+            }
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Recordatorio enviado por WhatsApp.']);
     }
 
     public function destroy(Pedido $pedido)

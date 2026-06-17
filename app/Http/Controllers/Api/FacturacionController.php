@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Configuracion;
 use App\Models\Venta;
+use App\Models\Cliente;
 use App\Services\FacturapiService;
+use App\Services\WhatsAppService;
 use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -454,10 +456,14 @@ class FacturacionController extends Controller
 
         $cc    = $this->getCorreosCC();
         $folio = $venta->folio;
+        $notif = $this->getNotifConfig();
 
-        Mail::html($html, function ($message) use ($email, $cc, $folio, $uuid, $xml, $pdf) {
+        Mail::mailer($this->resolveMailer($notif))->html($html, function ($message) use ($email, $cc, $folio, $uuid, $xml, $pdf, $notif) {
             $message->to($email)->subject("Factura CFDI {$folio}");
             if (!empty($cc)) $message->cc($cc);
+            if (!empty($notif['smtp_from_email'])) {
+                $message->from($notif['smtp_from_email'], $notif['smtp_from_name'] ?? null);
+            }
             if ($xml) {
                 $message->attachData($xml, "CFDI_{$folio}_{$uuid}.xml", ['mime' => 'application/xml']);
             }
@@ -618,6 +624,66 @@ class FacturacionController extends Controller
         } catch (\Exception $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
+    }
+
+    public function enviarCfdiWhatsApp(Request $request, Venta $venta)
+    {
+        $data = $request->validate([
+            'cliente_id' => ['nullable', 'integer'],
+            'telefono'   => ['nullable', 'string', 'max:30'],
+        ]);
+
+        if (!$venta->cfdi_uuid) {
+            return response()->json(['message' => 'Esta venta no tiene CFDI timbrado.'], 422);
+        }
+
+        $telefono = null;
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            $telefono = $cliente?->telefono;
+        } elseif (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+        }
+
+        if (!$telefono) {
+            return response()->json(['message' => 'No se encontró número de teléfono.'], 422);
+        }
+
+        $svc         = app(WhatsAppService::class);
+        $sucursalId  = $venta->sucursal_id ? (int) $venta->sucursal_id : null;
+        $publicCfg   = $svc->resolvePublicConfig((int) $venta->empresa_id, $sucursalId);
+        $technicalCfg = $svc->resolveTechnicalConfig((int) $venta->empresa_id, $sucursalId);
+
+        if (!$technicalCfg || !$technicalCfg->access_token || !$technicalCfg->phone_number_id) {
+            return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
+        }
+
+        $businessName = $technicalCfg->display_name
+            ?: $technicalCfg->business_name
+            ?: ($publicCfg['business_name'] ?? 'Tu negocio');
+
+        $receptor = $venta->cfdi_receptor;
+        $receptorNombre = $receptor['nombre'] ?? 'Público en General';
+        $receptorRfc    = $receptor['rfc'] ?? 'XAXX010101000';
+
+        $body = implode("\n", [
+            "🧾 *Factura electrónica — {$businessName}*",
+            '',
+            "🔖 *Folio venta:* {$venta->folio}",
+            "📋 *UUID:* {$venta->cfdi_uuid}",
+            "👤 *Receptor:* {$receptorNombre} ({$receptorRfc})",
+            '💰 *Total:* $' . number_format((float) $venta->total, 2),
+            '',
+            '_Tu CFDI ha sido timbrado correctamente ante el SAT._',
+        ]);
+
+        try {
+            $svc->sendTextMessage($technicalCfg, $telefono, $body);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Factura enviada por WhatsApp correctamente.']);
     }
 
     private function mapFormaPago(string $tipo): string

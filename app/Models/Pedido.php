@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Str;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -13,7 +14,7 @@ class Pedido extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'empresa_id', 'sucursal_id', 'folio', 'cotizacion_id', 'cliente_id', 'nombre_cliente',
+        'empresa_id', 'sucursal_id', 'folio', 'ticket_token', 'cotizacion_id', 'cliente_id', 'nombre_cliente',
         'email_cliente', 'vendedor_id', 'fecha', 'fecha_entrega', 'status',
         'subtotal', 'descuento', 'impuesto_pct', 'total', 'notas',
     ];
@@ -45,6 +46,7 @@ class Pedido extends Model
             if (!$model->folio) {
                 $model->folio = static::generarFolio($model->empresa_id);
             }
+            $model->ticket_token = Str::random(48);
         });
     }
 

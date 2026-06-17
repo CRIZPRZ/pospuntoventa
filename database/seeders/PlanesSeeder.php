@@ -22,7 +22,7 @@ class PlanesSeeder extends Seeder
                 'activo'             => true,
                 'modulos'            => [
                     'dashboard', 'pos', 'ventas', 'caja', 'cortes',
-                    'productos', 'categorias', 'clientes',
+                    'productos', 'categorias', 'clientes', 'ubicaciones',
                 ],
             ],
             [

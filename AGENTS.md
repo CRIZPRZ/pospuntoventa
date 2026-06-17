@@ -15,6 +15,7 @@ Sistema de Punto de Venta (POS) completo **multi-tenant**. Cada negocio es una `
 - **Registro**: `POST /api/register` (público) — crea empresa + admin role (todos los permisos) + user admin → devuelve token.
 - **Login/Me**: response incluye `empresa: { id, nombre, slug }`.
 - **Configuración**: archivo por tenant `storage/app/configuracion_{empresa_id}.json`, cache key `ventas_configuracion_{empresa_id}`, logo en `storage/app/public/config/{empresa_id}/`.
+- **WhatsApp Business**: la UX pública vive en `config.whatsapp`, pero las credenciales técnicas de Meta NO deben guardarse ni devolverse en ese JSON; van en `whatsapp_configs`.
 - **MercadoLibreService**: constructor tiene try/catch para no fallar si tabla no existe (ej. durante migrate:fresh).
 - **Folio ventas**: unique por `(empresa_id, folio)`. Se genera con `withoutGlobalScope('tenant')` filtrando por empresa.
 
@@ -31,6 +32,29 @@ Sistema de Punto de Venta (POS) completo **multi-tenant**. Cada negocio es una `
 - Al crear usuarios en UsuarioController: el rol se busca por `empresa_id` y `name` (no solo por name).
 - No usar `Role::pluck('name')` sin filtrar por empresa_id.
 - Ruta de registro NO debe estar dentro del grupo `auth:sanctum`.
+
+## WhatsApp Business (2026-06-05)
+- Tabla nueva: `whatsapp_configs`
+- Modelo: `app/Models/WhatsAppConfig.php`
+- Servicio: `app/Services/WhatsAppService.php`
+- Controlador: `app/Http/Controllers/Api/WhatsAppController.php`
+- Modelo vigente: `empresa + sucursal con fallback`
+- Endpoints:
+  - `POST /api/whatsapp/connect`
+  - `POST /api/whatsapp/complete`
+  - `POST /api/whatsapp/test`
+  - `POST /api/whatsapp/disconnect`
+- `connect` puede devolver `embedded_signup` con `app_id`, `config_id`, `redirect_uri` y `api_version` para lanzar `Facebook Login for Business` desde frontend.
+- `complete` cierra la conexión técnica cuando el onboarding embebido devuelve `code` o `access_token`, más `phone_number_id` y opcionalmente `waba_id`.
+- `ConfiguracionController::show()` hidrata `config.whatsapp` con estado público desde `whatsapp_configs`, pero nunca expone `access_token`, `phone_number_id` ni `whatsapp_business_account_id`.
+- `config.whatsapp` solo guarda UX y automatizaciones; si la sucursal tiene override se mezcla sobre la empresa y si no, hereda.
+- `whatsapp_configs` guarda la conexión técnica real por empresa o por sucursal: `empresa_id`, `sucursal_id nullable`, `phone_number_id`, `whatsapp_business_account_id`, `access_token`, `status`, `last_error`.
+- `disconnect` en scope sucursal elimina el override y hace que la sucursal vuelva a heredar el número general.
+- Config adicional requerida en `.env`: `WHATSAPP_APP_SECRET` y `WHATSAPP_LOGIN_CONFIGURATION_ID`.
+- Aunque `connect` soporta Embedded Signup, también acepta conexión manual enviando `phone_number_id`, `whatsapp_business_account_id` y `access_token` en el mismo endpoint para apps que aún no son Tech Provider/BSP.
+- `POST /api/whatsapp/test` primero intenta texto libre y, si Meta bloquea por la ventana de 24 horas, reintenta con la plantilla `hello_world` para que el número de prueba de Meta siga siendo útil durante desarrollo.
+- Automatización ya conectada: `VentaCompletada` dispara `SendVentaTicketToWhatsApp` y respeta `config.whatsapp.auto_send_ticket` con resolución `empresa + sucursal con fallback`.
+- Condiciones actuales del ticket automático: la venta debe tener `cliente_id`, el cliente debe tener `telefono`, y la conexión técnica del alcance efectivo debe estar completa.
 
 ## Stack
 - **Framework**: Laravel 13 (PHP 8.3)

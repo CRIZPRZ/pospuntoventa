@@ -26,8 +26,10 @@ use App\Http\Controllers\Api\ProveedorController;
 use App\Http\Controllers\Api\PagoProveedorController;
 use App\Http\Controllers\Api\RolPermisoController;
 use App\Http\Controllers\Api\FacturacionController;
+use App\Http\Controllers\Api\WhatsAppController;
 use App\Http\Controllers\Api\SucursalController;
 use App\Http\Controllers\Api\CamaraController;
+use App\Http\Controllers\Api\UbicacionController;
 use App\Http\Controllers\Api\AgentController;
 use Illuminate\Support\Facades\Route;
 
@@ -99,6 +101,7 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('clientes', [ClienteController::class, 'store']);
         Route::put('clientes/{cliente}', [ClienteController::class, 'update']);
         Route::delete('clientes/{cliente}', [ClienteController::class, 'destroy']);
+        Route::post('clientes/{cliente}/recordar-pago-whatsapp', [ClienteController::class, 'recordarPagoWhatsApp']);
     });
 
     // Abonos
@@ -115,6 +118,7 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::get('ventas/{venta}', [VentaController::class, 'show']);
         Route::get('ventas/{venta}/ticket', [VentaController::class, 'ticket']);
         Route::post('ventas/{venta}/imprimir-termico', [VentaController::class, 'imprimirTermico']);
+        Route::post('ventas/{venta}/enviar-whatsapp', [VentaController::class, 'enviarWhatsApp']);
      });
     Route::middleware('can:realizar ventas')->group(function () {
         Route::post('ventas', [VentaController::class, 'store']);
@@ -193,6 +197,11 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::patch('configuracion', [ConfiguracionController::class, 'update']);
         Route::post('configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
         Route::delete('configuracion/logo', [ConfiguracionController::class, 'deleteLogo']);
+        Route::post('configuracion/test-correo', [ConfiguracionController::class, 'testCorreo']);
+        Route::post('whatsapp/connect', [WhatsAppController::class, 'connect']);
+        Route::post('whatsapp/complete', [WhatsAppController::class, 'complete']);
+        Route::post('whatsapp/test', [WhatsAppController::class, 'test']);
+        Route::post('whatsapp/disconnect', [WhatsAppController::class, 'disconnect']);
     });
 
     // Cotizaciones
@@ -208,6 +217,7 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('cotizaciones/{cotizacion}/convertir', [CotizacionController::class, 'convertir']);
         Route::post('cotizaciones/{cotizacion}/convertir-pedido', [CotizacionController::class, 'convertirAPedido']);
         Route::post('cotizaciones/{cotizacion}/enviar', [CotizacionController::class, 'enviar']);
+        Route::post('cotizaciones/{cotizacion}/enviar-whatsapp', [CotizacionController::class, 'enviarWhatsApp']);
     });
 
     // Pedidos
@@ -222,6 +232,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::delete('pedidos/{pedido}', [PedidoController::class, 'destroy']);
         Route::post('pedidos/{pedido}/enviar', [PedidoController::class, 'enviar']);
         Route::post('pedidos/{pedido}/recordar', [PedidoController::class, 'recordar']);
+        Route::post('pedidos/{pedido}/enviar-whatsapp', [PedidoController::class, 'enviarWhatsApp']);
+        Route::post('pedidos/{pedido}/recordar-whatsapp', [PedidoController::class, 'recordarWhatsApp']);
     });
 
     // Sucursales
@@ -254,6 +266,20 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('camaras/{camara}/snapshot', [CamaraController::class, 'snapshot']);
     });
 
+    // Ubicaciones
+    Route::middleware('can:ver ubicaciones')->group(function () {
+        Route::get('ubicaciones', [UbicacionController::class, 'index']);
+        Route::get('ubicaciones/{ubicacion}', [UbicacionController::class, 'show']);
+    });
+    Route::middleware('can:gestionar ubicaciones')->group(function () {
+        Route::post('ubicaciones', [UbicacionController::class, 'store']);
+        Route::post('ubicaciones/importar', [UbicacionController::class, 'importar']);
+        Route::put('ubicaciones/{ubicacion}', [UbicacionController::class, 'update']);
+        Route::patch('ubicaciones/{ubicacion}/cantidad', [UbicacionController::class, 'ajustarCantidad']);
+        Route::patch('ubicaciones/{ubicacion}/toggle', [UbicacionController::class, 'toggle']);
+        Route::delete('ubicaciones/{ubicacion}', [UbicacionController::class, 'destroy']);
+    });
+
     // Roles y permisos
     Route::middleware('can:gestionar roles')->group(function () {
         Route::apiResource('roles', RolPermisoController::class)->except(['show']);
@@ -271,9 +297,10 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('confirmar-csd',    [FacturacionController::class, 'confirmarCsd']);
     });
     Route::middleware('can:gestionar facturacion')->group(function () {
-        Route::post('ventas/{venta}/facturar',      [FacturacionController::class, 'facturar']);
-        Route::post('ventas/{venta}/cfdi/cancelar', [FacturacionController::class, 'cancelarCfdi']);
-        Route::post('ventas/{venta}/cfdi/reenviar', [FacturacionController::class, 'reenviarEmail']);
+        Route::post('ventas/{venta}/facturar',        [FacturacionController::class, 'facturar']);
+        Route::post('ventas/{venta}/cfdi/cancelar',   [FacturacionController::class, 'cancelarCfdi']);
+        Route::post('ventas/{venta}/cfdi/reenviar',   [FacturacionController::class, 'reenviarEmail']);
+        Route::post('ventas/{venta}/cfdi/whatsapp',   [FacturacionController::class, 'enviarCfdiWhatsApp']);
     });
     Route::middleware('can:ver facturacion')->group(function () {
         Route::get('ventas/{venta}/cfdi/xml',       [FacturacionController::class, 'downloadXml']);
@@ -368,3 +395,4 @@ Route::get('mercado-libre/callback', [MercadoLibreController::class, 'callback']
 
 // Mercado Libre webhook (no auth required - ML sends directly)
 Route::post('mercado-libre/webhook', [MercadoLibreController::class, 'webhook']);
+

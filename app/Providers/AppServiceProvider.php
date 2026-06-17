@@ -20,5 +20,8 @@ class AppServiceProvider extends ServiceProvider
             VentaCompletada::class,
             SyncStockToMercadoLibre::class,
         );
+
+        // SendVentaTicketToWhatsApp deshabilitado — el POS pregunta al cajero
+        // si quiere enviar ticket por WA. El listener causaba doble mensaje.
     }
 }

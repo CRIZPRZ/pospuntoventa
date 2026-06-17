@@ -11,6 +11,9 @@ use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Events\VentaCompletada;
+use App\Listeners\SendVentaTicketToWhatsApp;
+use App\Models\WhatsAppConfig;
+use App\Services\WhatsAppService;
 use Illuminate\Validation\Rule;
 
 class VentaController extends Controller
@@ -215,6 +218,65 @@ class VentaController extends Controller
     public function ticket(Venta $venta)
     {
         return response()->json($venta->load(['user', 'cliente', 'items.producto', 'pagos', 'canceladoPor']));
+    }
+
+    public function enviarWhatsApp(Request $request, Venta $venta)
+    {
+        $data = $request->validate([
+            'cliente_id' => ['nullable', 'integer'],
+            'telefono'   => ['nullable', 'string', 'max:30'],
+        ]);
+
+        $venta->load(['items']);
+
+        $telefono = null;
+
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            $telefono = $cliente?->telefono;
+        } elseif (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+        }
+
+        if (!$telefono) {
+            return response()->json(['message' => 'No se encontró número de teléfono para enviar el ticket.'], 422);
+        }
+
+        $svc = app(WhatsAppService::class);
+        $sucursalId = $venta->sucursal_id ? (int) $venta->sucursal_id : null;
+
+        $publicConfig = $svc->resolvePublicConfig((int) $venta->empresa_id, $sucursalId);
+        $technicalConfig = $svc->resolveTechnicalConfig((int) $venta->empresa_id, $sucursalId);
+
+        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
+            return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
+        }
+
+        $businessName = $technicalConfig->display_name
+            ?: $technicalConfig->business_name
+            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+
+        [$body, $ticketUrl] = SendVentaTicketToWhatsApp::buildTicketContent($venta, $businessName);
+
+        try {
+            if ($ticketUrl) {
+                $svc->sendTicketMessage($technicalConfig, $telefono, $body, $ticketUrl);
+            } else {
+                $svc->sendTextMessage($technicalConfig, $telefono, $body);
+            }
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        // Link client to sale if not already linked
+        if (!empty($data['cliente_id']) && !$venta->cliente_id) {
+            $venta->update(['cliente_id' => $data['cliente_id']]);
+        }
+
+        return response()->json([
+            'message'    => 'Ticket enviado por WhatsApp correctamente.',
+            'cliente_id' => $venta->cliente_id,
+        ]);
     }
 
     public function imprimirTermico(Request $request, Venta $venta)

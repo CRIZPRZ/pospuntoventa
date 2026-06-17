@@ -5,18 +5,23 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Configuracion;
 use App\Models\ConfiguracionSucursal;
+use App\Models\WhatsAppConfig;
+use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
 // Secciones que pertenecen a la empresa (legales, compartidas entre sucursales)
-const EMPRESA_SECTIONS = ['empresa', 'facturacion'];
+const EMPRESA_SECTIONS = ['empresa', 'facturacion', 'documentos'];
 
 // Secciones que pertenecen a la sucursal (operativas, por tienda)
 const SUCURSAL_SECTIONS = ['pos', 'impresion', 'ticket', 'notificaciones', 'nombre_comercial'];
 
 class ConfiguracionController extends Controller
 {
+    use EnviaCorreosTrait;
+
     // ── IDs ──────────────────────────────────────────────────────────────────
 
     private function empresaId(): int
@@ -46,6 +51,7 @@ class ConfiguracionController extends Controller
     public function show(): \Illuminate\Http\JsonResponse
     {
         $config = $this->mergedConfig();
+        $config = $this->attachWhatsAppConfig($config);
         $config['empresa']['logo_url'] = $this->logoUrl();
 
         return response()->json($config);
@@ -60,6 +66,9 @@ class ConfiguracionController extends Controller
             'ticket'           => ['nullable', 'array'],
             'notificaciones'   => ['nullable', 'array'],
             'facturacion'      => ['nullable', 'array'],
+            'documentos'       => ['nullable', 'array'],
+            'whatsapp'         => ['nullable', 'array'],
+            'whatsapp_scope'   => ['nullable', 'string', 'in:empresa,sucursal'],
             'nombre_comercial' => ['nullable', 'string', 'max:150'],
         ]);
 
@@ -84,7 +93,27 @@ class ConfiguracionController extends Controller
             Cache::forever($this->sucursalCacheKey(), $merged);
         }
 
+        if (array_key_exists('whatsapp', $data)) {
+            $scope = $data['whatsapp_scope'] ?? 'empresa';
+            if ($scope === 'sucursal' && $this->sucursalId()) {
+                $merged = array_replace_recursive($this->sucursalConfig(), ['whatsapp' => $data['whatsapp'] ?? []]);
+                ConfiguracionSucursal::updateOrCreate(
+                    ['sucursal_id' => $this->sucursalId()],
+                    ['empresa_id' => $this->empresaId(), 'config' => $merged]
+                );
+                Cache::forever($this->sucursalCacheKey(), $merged);
+            } else {
+                $merged = array_replace_recursive($this->empresaConfig(), ['whatsapp' => $data['whatsapp'] ?? []]);
+                Configuracion::updateOrCreate(
+                    ['empresa_id' => $this->empresaId()],
+                    ['config' => $merged]
+                );
+                Cache::forever($this->empresaCacheKey(), $merged);
+            }
+        }
+
         $config = $this->mergedConfig();
+        $config = $this->attachWhatsAppConfig($config);
         $config['empresa']['logo_url'] = $this->logoUrl();
 
         return response()->json($config);
@@ -106,6 +135,40 @@ class ConfiguracionController extends Controller
         Storage::disk('public')->putFileAs($dir, $file, $filename);
 
         return response()->json(['url' => $this->logoUrl(), 'logo_url' => $this->logoUrl()]);
+    }
+
+    public function testCorreo(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $data = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        $notif = $this->mergedConfig()['notificaciones'] ?? [];
+
+        if (empty($notif['smtp_host'])) {
+            return response()->json(['message' => 'Configura y guarda el servidor SMTP antes de enviar una prueba.'], 422);
+        }
+
+        $empresaNombre = $this->mergedConfig()['empresa']['nombre'] ?? 'Mi Empresa';
+
+        $html = $this->buildEmailWrapper(
+            '<p style="color:#374151;font-size:14px;margin:0">Este es un correo de prueba de la configuración SMTP de '
+                . htmlspecialchars($empresaNombre) . '. Si lo recibiste, la configuración funciona correctamente.</p>',
+            'Correo de prueba'
+        );
+
+        try {
+            Mail::mailer($this->resolveMailer($notif))->html($html, function ($message) use ($data, $notif) {
+                $message->to($data['email'])->subject('Correo de prueba');
+                if (!empty($notif['smtp_from_email'])) {
+                    $message->from($notif['smtp_from_email'], $notif['smtp_from_name'] ?? null);
+                }
+            });
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'No se pudo enviar el correo: ' . $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => "Correo de prueba enviado a {$data['email']}"]);
     }
 
     public function deleteLogo(): \Illuminate\Http\JsonResponse
@@ -163,6 +226,58 @@ class ConfiguracionController extends Controller
         return array_replace_recursive($empresa, $sucursal);
     }
 
+    private function attachWhatsAppConfig(array $config): array
+    {
+        $empresaConfig = $this->empresaConfig();
+        $sucursalConfig = $this->sucursalConfig();
+
+        $empresaPublic = array_merge($this->defaultWhatsApp(), $empresaConfig['whatsapp'] ?? []);
+        $sucursalPublic = $sucursalConfig['whatsapp'] ?? null;
+        $hasSucursalOverride = is_array($sucursalPublic) && !empty($sucursalPublic);
+
+        $resolved = $hasSucursalOverride
+            ? array_replace_recursive($empresaPublic, $sucursalPublic)
+            : $empresaPublic;
+
+        $effectiveRow = $this->effectiveWhatsAppTechnicalConfig($hasSucursalOverride);
+        if ($effectiveRow) {
+            $resolved['status'] = $effectiveRow->status ?: ($resolved['status'] ?? 'disconnected');
+            $resolved['business_name'] = $resolved['business_name'] ?: ($effectiveRow->business_name ?? '');
+            $resolved['phone_number'] = $resolved['phone_number'] ?: ($effectiveRow->phone_number ?? '');
+            $resolved['display_name'] = $effectiveRow->display_name ?? ($resolved['display_name'] ?? '');
+            $resolved['connected_phone_number'] = $effectiveRow->connected_phone_number ?? ($resolved['connected_phone_number'] ?? '');
+            $resolved['last_test_at'] = $effectiveRow->last_test_at?->format('Y-m-d H:i:s') ?? ($resolved['last_test_at'] ?? '');
+            $resolved['last_error'] = $effectiveRow->last_error ?? ($resolved['last_error'] ?? '');
+        }
+
+        $resolved['scope_mode'] = $hasSucursalOverride ? 'sucursal' : 'empresa';
+        $resolved['inherits_from_empresa'] = !$hasSucursalOverride;
+        $resolved['empresa_default'] = $empresaPublic;
+
+        $config['whatsapp'] = $resolved;
+
+        return $config;
+    }
+
+    private function effectiveWhatsAppTechnicalConfig(bool $hasSucursalOverride): ?WhatsAppConfig
+    {
+        if ($hasSucursalOverride && $this->sucursalId()) {
+            $row = WhatsAppConfig::withoutGlobalScopes()
+                ->where('empresa_id', $this->empresaId())
+                ->where('sucursal_id', $this->sucursalId())
+                ->first();
+
+            if ($row) {
+                return $row;
+            }
+        }
+
+        return WhatsAppConfig::withoutGlobalScopes()
+            ->where('empresa_id', $this->empresaId())
+            ->whereNull('sucursal_id')
+            ->first();
+    }
+
     // ── Logo helpers ─────────────────────────────────────────────────────────
 
     private function logoDir(): string
@@ -210,6 +325,7 @@ class ConfiguracionController extends Controller
                 'folio_actual'      => 1,
                 'emisor_registrado' => false,
             ],
+            'whatsapp' => $this->defaultWhatsApp(),
         ];
     }
 
@@ -274,6 +390,25 @@ class ConfiguracionController extends Controller
                 'pie'            => '',
                 'notif_al_crear' => true,
             ],
+        ];
+    }
+
+    private function defaultWhatsApp(): array
+    {
+        return [
+            'status' => 'disconnected',
+            'phone_number' => '',
+            'business_name' => '',
+            'display_name' => '',
+            'connected_phone_number' => '',
+            'test_phone_number' => '',
+            'last_test_at' => '',
+            'last_error' => '',
+            'auto_send_ticket' => true,
+            'auto_send_quote' => false,
+            'auto_send_order_ready' => false,
+            'auto_send_invoice' => false,
+            'auto_send_payment_reminder' => false,
         ];
     }
 }

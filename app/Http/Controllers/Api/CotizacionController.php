@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
+use App\Models\Cliente;
 use App\Models\Cotizacion;
 use App\Models\CotizacionItem;
 use App\Models\Pedido;
 use App\Models\PedidoItem;
 use App\Models\Venta;
 use App\Models\VentaItem;
+use App\Services\WhatsAppService;
 use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
 
@@ -53,6 +55,7 @@ class CotizacionController extends Controller
             'cliente_id'                => 'nullable|exists:clientes,id',
             'nombre_cliente'            => 'nullable|string|max:255',
             'email_cliente'             => 'nullable|email|max:255',
+            'telefono_cliente'          => 'nullable|string|max:40',
             'vendedor_id'               => 'nullable|exists:users,id',
             'fecha'                     => 'required|date',
             'fecha_vencimiento'         => 'nullable|date',
@@ -73,10 +76,11 @@ class CotizacionController extends Controller
             'cliente_id'       => $data['cliente_id'] ?? null,
             'nombre_cliente'   => $data['nombre_cliente'] ?? null,
             'email_cliente'    => $data['email_cliente'] ?? null,
+            'telefono_cliente' => $data['telefono_cliente'] ?? null,
             'vendedor_id'      => $data['vendedor_id'] ?? auth()->id(),
             'fecha'            => $data['fecha'],
             'fecha_vencimiento' => $data['fecha_vencimiento'] ?? null,
-            'status'           => $data['status'] ?? 'borrador',
+            'status'           => 'borrador', // always borrador on create; client sets aceptada/rechazada via public link
             'descuento'        => $data['descuento'] ?? 0,
             'impuesto_pct'     => $data['impuesto_pct'] ?? 0,
             'notas'            => $data['notas'] ?? null,
@@ -131,6 +135,7 @@ class CotizacionController extends Controller
             'cliente_id'                => 'nullable|exists:clientes,id',
             'nombre_cliente'            => 'nullable|string|max:255',
             'email_cliente'             => 'nullable|email|max:255',
+            'telefono_cliente'          => 'nullable|string|max:40',
             'vendedor_id'               => 'nullable|exists:users,id',
             'fecha'                     => 'nullable|date',
             'fecha_vencimiento'         => 'nullable|date',
@@ -150,6 +155,7 @@ class CotizacionController extends Controller
             'cliente_id'       => $data['cliente_id'] ?? $cotizacion->cliente_id,
             'nombre_cliente'   => $data['nombre_cliente'] ?? $cotizacion->nombre_cliente,
             'email_cliente'    => $data['email_cliente'] ?? $cotizacion->email_cliente,
+            'telefono_cliente' => array_key_exists('telefono_cliente', $data) ? $data['telefono_cliente'] : $cotizacion->telefono_cliente,
             'vendedor_id'      => $data['vendedor_id'] ?? $cotizacion->vendedor_id,
             'fecha'            => $data['fecha'] ?? $cotizacion->fecha,
             'fecha_vencimiento' => array_key_exists('fecha_vencimiento', $data) ? $data['fecha_vencimiento'] : $cotizacion->fecha_vencimiento,
@@ -497,5 +503,84 @@ class CotizacionController extends Controller
         $html .= '<br><button onclick="window.print()">Imprimir</button></body></html>';
 
         return $html;
+    }
+
+    public function enviarWhatsApp(Request $request, Cotizacion $cotizacion)
+    {
+        $data = $request->validate([
+            'cliente_id' => ['nullable', 'integer'],
+            'telefono'   => ['nullable', 'string', 'max:30'],
+        ]);
+
+        $cotizacion->load(['items']);
+
+        $telefono = null;
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            $telefono = $cliente?->telefono;
+            if (!$cotizacion->cliente_id) {
+                $cotizacion->update(['cliente_id' => $data['cliente_id']]);
+            }
+        } elseif (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+            // Always persist the provided phone so future resends use the corrected number
+            $cotizacion->update(['telefono_cliente' => $telefono]);
+        }
+
+        if (!$telefono) {
+            return response()->json(['message' => 'No se encontró número de teléfono.'], 422);
+        }
+
+        $svc = app(WhatsAppService::class);
+        $sucursalId = $cotizacion->sucursal_id ? (int) $cotizacion->sucursal_id : null;
+        $publicConfig = $svc->resolvePublicConfig((int) $cotizacion->empresa_id, $sucursalId);
+        $technicalConfig = $svc->resolveTechnicalConfig((int) $cotizacion->empresa_id, $sucursalId);
+
+        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
+            return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
+        }
+
+        $businessName = $technicalConfig->display_name
+            ?: $technicalConfig->business_name
+            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+
+        $itemLines = $cotizacion->items->take(5)->map(function ($item) {
+            return '▸ ' . ($item->descripcion ?? $item->nombre_producto ?? '—') . ' × ' . (int) $item->cantidad
+                . ' — $' . number_format((float) ($item->precio_unitario * $item->cantidad), 2);
+        })->implode("\n");
+
+        if ($cotizacion->items->count() > 5) {
+            $itemLines .= "\n▸ _y " . ($cotizacion->items->count() - 5) . ' producto(s) más_';
+        }
+
+        $body = implode("\n", [
+            "📋 *Cotización de {$businessName}*",
+            '',
+            "🔖 *Folio:* {$cotizacion->folio}",
+            '💰 *Total:* $' . number_format((float) $cotizacion->total, 2),
+            '',
+            '*Productos:*',
+            $itemLines,
+        ]);
+
+        $ticketUrl = $cotizacion->ticket_token
+            ? url('/t/cotizacion/' . $cotizacion->ticket_token)
+            : null;
+
+        try {
+            if ($ticketUrl) {
+                $svc->sendTicketMessage($technicalConfig, $telefono, $body, $ticketUrl, 'Ver cotización');
+            } else {
+                $svc->sendTextMessage($technicalConfig, $telefono, $body);
+            }
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        if ($cotizacion->status === 'borrador') {
+            $cotizacion->update(['status' => 'enviada']);
+        }
+
+        return response()->json(['message' => 'Cotización enviada por WhatsApp.', 'status' => $cotizacion->status]);
     }
 }

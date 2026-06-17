@@ -204,7 +204,7 @@ class EmpresaController extends Controller
             'productos', 'categorias', 'clientes', 'abonos',
             'reportes', 'proveedores', 'pagos_proveedores',
             'cotizaciones', 'pedidos', 'usuarios', 'roles',
-            'sucursales', 'configuracion', 'camaras',
+            'sucursales', 'configuracion', 'camaras', 'ubicaciones',
         ];
     }
 }

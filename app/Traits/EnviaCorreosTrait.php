@@ -3,6 +3,7 @@
 namespace App\Traits;
 
 use App\Models\Configuracion;
+use App\Models\ConfiguracionSucursal;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
@@ -26,7 +27,22 @@ trait EnviaCorreosTrait
 
     protected function getNotifConfig(): array
     {
-        return $this->getConfig()['notificaciones'] ?? [];
+        $notif = $this->getConfig()['notificaciones'] ?? [];
+
+        if (app()->bound('sucursal_id')) {
+            $sucursalId = (int) app('sucursal_id');
+            $cacheKey   = 'ventas_config_sucursal_' . $sucursalId;
+            $sucursalConfig = Cache::get($cacheKey);
+            if (!$sucursalConfig) {
+                $row = ConfiguracionSucursal::where('sucursal_id', $sucursalId)->first();
+                $sucursalConfig = $row ? $row->config : [];
+            }
+            if (!empty($sucursalConfig['notificaciones'])) {
+                $notif = array_replace($notif, $sucursalConfig['notificaciones']);
+            }
+        }
+
+        return $notif;
     }
 
     protected function getCorreosCC(): array
@@ -53,14 +69,40 @@ trait EnviaCorreosTrait
 
     protected function enviarConCC(string $to, string $subject, string $html): void
     {
-        $cc = $this->getCorreosCC();
+        $cc    = $this->getCorreosCC();
+        $notif = $this->getNotifConfig();
 
-        Mail::html($html, function ($message) use ($to, $subject, $cc) {
+        $mailer = Mail::mailer($this->resolveMailer($notif));
+
+        $mailer->html($html, function ($message) use ($to, $subject, $cc, $notif) {
             $message->to($to)->subject($subject);
             if (!empty($cc)) {
                 $message->cc($cc);
             }
+            if (!empty($notif['smtp_from_email'])) {
+                $message->from($notif['smtp_from_email'], $notif['smtp_from_name'] ?? null);
+            }
         });
+    }
+
+    protected function resolveMailer(array $notif): string
+    {
+        if (empty($notif['smtp_host'])) {
+            return config('mail.default');
+        }
+
+        $name = 'tenant_smtp_' . $this->tenantId();
+
+        config(["mail.mailers.{$name}" => [
+            'transport'  => 'smtp',
+            'host'       => $notif['smtp_host'],
+            'port'       => $notif['smtp_port'] ?? 587,
+            'username'   => $notif['smtp_user'] ?? null,
+            'password'   => $notif['smtp_password'] ?? null,
+            'encryption' => ($notif['smtp_port'] ?? 587) == 465 ? 'ssl' : 'tls',
+        ]]);
+
+        return $name;
     }
 
     protected function buildEmailWrapper(string $contentHtml, string $subtitulo = '', array $overrides = []): string

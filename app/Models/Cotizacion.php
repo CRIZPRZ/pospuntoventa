@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Str;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -15,7 +16,7 @@ class Cotizacion extends Model
     protected $table = 'cotizaciones';
 
     protected $fillable = [
-        'empresa_id', 'sucursal_id', 'folio', 'cliente_id', 'nombre_cliente', 'email_cliente', 'vendedor_id',
+        'empresa_id', 'sucursal_id', 'folio', 'ticket_token', 'cliente_id', 'nombre_cliente', 'email_cliente', 'telefono_cliente', 'vendedor_id',
         'fecha', 'fecha_vencimiento', 'status',
         'subtotal', 'descuento', 'impuesto_pct', 'total',
         'notas', 'venta_id', 'pedido_id',
@@ -45,6 +46,7 @@ class Cotizacion extends Model
             if (!$model->sucursal_id && app()->bound('sucursal_id')) {
                 $model->sucursal_id = app('sucursal_id');
             }
+            $model->ticket_token = Str::random(48);
         });
     }
 

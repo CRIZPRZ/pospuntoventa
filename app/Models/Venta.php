@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -13,7 +14,7 @@ class Venta extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'empresa_id', 'sucursal_id', 'folio', 'user_id', 'caja_id', 'cliente_id',
+        'empresa_id', 'sucursal_id', 'folio', 'ticket_token', 'user_id', 'caja_id', 'cliente_id',
         'subtotal', 'descuento', 'impuesto', 'total',
         'tipo_pago', 'estado', 'cancelada_por', 'notas',
         'cfdi_uuid', 'cfdi_facturapi_id', 'cfdi_xml', 'cfdi_status', 'cfdi_receptor',
@@ -46,6 +47,7 @@ class Venta extends Model
                 ->where('empresa_id', $empresaId)
                 ->count();
             $model->folio = 'V-' . str_pad($count + 1, 6, '0', STR_PAD_LEFT);
+            $model->ticket_token = Str::random(48);
         });
     }
 

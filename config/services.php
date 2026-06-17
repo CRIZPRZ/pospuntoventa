@@ -47,6 +47,15 @@ return [
         'usd_rate' => env('MELI_USD_RATE', 0.05),
     ],
 
+    'whatsapp' => [
+        'app_id' => env('WHATSAPP_APP_ID'),
+        'app_secret' => env('WHATSAPP_APP_SECRET'),
+        'api_version' => env('WHATSAPP_API_VERSION', 'v23.0'),
+        'login_configuration_id' => env('WHATSAPP_LOGIN_CONFIGURATION_ID'),
+        'embedded_signup_url' => env('WHATSAPP_EMBEDDED_SIGNUP_URL'),
+        'redirect_uri' => env('WHATSAPP_REDIRECT_URI'),
+    ],
+
     'stripe' => [
         'secret'          => env('STRIPE_SECRET_KEY'),
         'publishable'     => env('STRIPE_PUBLISHABLE_KEY'),

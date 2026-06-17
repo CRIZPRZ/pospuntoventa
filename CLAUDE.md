@@ -117,6 +117,28 @@ POST   /cortes/{id}/imprimir-termico   ← PENDIENTE IMPLEMENTAR (frontend ya lo
 - Archivo `storage/app/configuracion.json` es la fuente de verdad — NO eliminar en deploys.
 - Logo sigue en `storage/app/public/config/` (Storage disk public).
 
+## WhatsApp Business
+- `config.whatsapp` es solo configuración pública para frontend: número del negocio, estado visible, prueba y automatizaciones.
+- Secretos de Meta NO van en `config.whatsapp`; se guardan en tabla `whatsapp_configs`.
+- El modelo vigente es `empresa + sucursal con fallback`: si una sucursal no tiene override propio, usa la configuración técnica y pública de la empresa.
+- Backend nuevo:
+  - `app/Http/Controllers/Api/WhatsAppController.php`
+  - `app/Services/WhatsAppService.php`
+  - `app/Models/WhatsAppConfig.php`
+  - migration `2026_06_05_110324_create_whatsapp_configs_table.php`
+- Rutas:
+  - `POST /api/whatsapp/connect`
+  - `POST /api/whatsapp/complete`
+  - `POST /api/whatsapp/test`
+  - `POST /api/whatsapp/disconnect`
+- `POST /api/whatsapp/connect` puede devolver `embedded_signup` (`app_id`, `config_id`, `redirect_uri`, `api_version`) para iniciar `Facebook Login for Business` desde frontend.
+- `POST /api/whatsapp/complete` se usa cuando el popup/callback ya trae `code` o `access_token` más los datos técnicos del número y hay que persistirlos sin captura manual.
+- `POST /api/whatsapp/test` intenta primero enviar texto libre; si Meta responde que ya expiró la ventana de 24 horas, el backend cae automáticamente a la plantilla `hello_world`.
+- `ConfiguracionController` hidrata `config.whatsapp` desde la tabla técnica para que el frontend vea `status`, `display_name`, `connected_phone_number`, `last_test_at`, `last_error`, `scope_mode`, `inherits_from_empresa` sin exponer tokens.
+- `.env` debe incluir `WHATSAPP_APP_SECRET` y `WHATSAPP_LOGIN_CONFIGURATION_ID` además del `APP_ID`, `REDIRECT_URI` y valores heredados.
+- El mismo `POST /api/whatsapp/connect` también debe aceptar onboarding manual con `phone_number_id`, `whatsapp_business_account_id` y `access_token` para escenarios donde Meta restringe Embedded Signup a BSP/Tech Provider.
+- Primer automatismo real: `App\Listeners\SendVentaTicketToWhatsApp` escucha `VentaCompletada` desde `AppServiceProvider` y envía un resumen de ticket al `cliente.telefono` si `auto_send_ticket` está activo y existe conexión técnica efectiva.
+
 ## Cortes — ventas por proveedor, num_ventas, y totales por método de pago
 - `ventas_departamento` en response agrupa por proveedor via JOIN: `venta_items → productos → proveedores`.
 - Columna usada: `proveedores.nombre`. Items sin proveedor muestran "SIN PROVEEDOR".
