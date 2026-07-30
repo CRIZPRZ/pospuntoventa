@@ -33,7 +33,7 @@ use App\Http\Controllers\Api\UbicacionController;
 use App\Http\Controllers\Api\AgentController;
 use Illuminate\Support\Facades\Route;
 
-Route::post('register', [RegisterController::class, 'register']);
+Route::post('register', [RegisterController::class, 'register'])->middleware('throttle:register');
 
 Route::prefix('auth')->group(function () {
     Route::post('login', [AuthController::class, 'login']);
@@ -200,6 +200,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('configuracion/test-correo', [ConfiguracionController::class, 'testCorreo']);
         Route::post('whatsapp/connect', [WhatsAppController::class, 'connect']);
         Route::post('whatsapp/complete', [WhatsAppController::class, 'complete']);
+        Route::get('whatsapp/qr', [WhatsAppController::class, 'qr']);
+        Route::get('whatsapp/status', [WhatsAppController::class, 'status']);
         Route::post('whatsapp/test', [WhatsAppController::class, 'test']);
         Route::post('whatsapp/disconnect', [WhatsAppController::class, 'disconnect']);
     });
@@ -287,7 +289,7 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
     });
 
     // Facturación CFDI
-    Route::prefix('facturacion')->group(function () {
+    Route::middleware('can:gestionar facturacion')->prefix('facturacion')->group(function () {
         Route::post('setup',      [FacturacionController::class, 'setup']);
         Route::post('upload-csd', [FacturacionController::class, 'uploadCsd']);
         Route::post('test',       [FacturacionController::class, 'test']);
@@ -328,19 +330,22 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
             Route::post('clear-test-user', [MercadoLibreController::class, 'clearTestUser']);
         });
 
-        Route::middleware('can:ver mercado libre')->group(function () {
+        Route::middleware('can:gestionar mercado libre')->group(function () {
             Route::post('productos/{producto}/publish', [MercadoLibreController::class, 'publish']);
             Route::post('productos/{producto}/sync-stock', [MercadoLibreController::class, 'syncStock']);
             Route::post('productos/{producto}/sync-price', [MercadoLibreController::class, 'syncPrice']);
             Route::post('productos/{producto}/pause', [MercadoLibreController::class, 'pause']);
             Route::post('productos/{producto}/reactivate', [MercadoLibreController::class, 'reactivate']);
             Route::delete('productos/{producto}/unlink', [MercadoLibreController::class, 'unlink']);
-            Route::get('productos/{producto}/info', [MercadoLibreController::class, 'productInfo']);
-            Route::get('mis-publicaciones', [MercadoLibreController::class, 'misPublicaciones']);
             Route::post('importar', [MercadoLibreController::class, 'importarProductos']);
-            Route::get('kits/{productoMeli}', [MercadoLibreController::class, 'getKitComponentes']);
             Route::post('kits/{productoMeli}', [MercadoLibreController::class, 'setKitComponentes']);
             Route::delete('kits/{productoMeli}', [MercadoLibreController::class, 'deleteKitComponentes']);
+        });
+
+        Route::middleware('can:ver mercado libre')->group(function () {
+            Route::get('productos/{producto}/info', [MercadoLibreController::class, 'productInfo']);
+            Route::get('mis-publicaciones', [MercadoLibreController::class, 'misPublicaciones']);
+            Route::get('kits/{productoMeli}', [MercadoLibreController::class, 'getKitComponentes']);
         });
     });
 });
@@ -356,7 +361,17 @@ Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(f
     Route::post('empresas/{empresa}/modulos/toggle', [SuperAdminEmpresaController::class, 'toggleModulo']);
     Route::post('empresas/{empresa}/modulos', [SuperAdminEmpresaController::class, 'setModulos']);
     Route::post('empresas/{empresa}/asignar-plan', [SuperAdminEmpresaController::class, 'asignarPlan']);
+    Route::post('empresas/{empresa}/recargar-timbres', [SuperAdminEmpresaController::class, 'recargarTimbres']);
+    Route::post('empresas/{empresa}/recargar-credito', [SuperAdminEmpresaController::class, 'recargarCredito']);
+    Route::get('empresas/{empresa}/recargas', [SuscripcionFacturaController::class, 'indexRecargas']);
     Route::post('empresas/{empresa}/facturar-manual', [SuscripcionFacturaController::class, 'facturarManual']);
+    Route::post('recargas/{recarga}/facturar', [SuscripcionFacturaController::class, 'facturarRecarga']);
+
+    // Facturas de suscripción (panel superadmin)
+    Route::get('facturas', [SuscripcionFacturaController::class, 'indexSuperAdmin']);
+    Route::get('facturas/{factura}/xml', [SuscripcionFacturaController::class, 'downloadXmlSuperAdmin']);
+    Route::get('facturas/{factura}/pdf', [SuscripcionFacturaController::class, 'downloadPdfSuperAdmin']);
+    Route::post('facturas/{factura}/reenviar', [SuscripcionFacturaController::class, 'reenviarSuperAdmin']);
 
     // Config fiscal del superadmin (para emitir CFDIs de suscripciones)
     Route::get('config-fiscal', [SuperAdminConfigFiscalController::class, 'show']);
@@ -390,9 +405,13 @@ Route::withoutMiddleware([\App\Http\Middleware\ResolveTenant::class, \App\Http\M
 // Planes públicos — NO auth, para landing page
 Route::get('planes', [BillingController::class, 'planesPublicos']);
 
+// CFDI público por UUID — NO auth, para enlaces en WhatsApp
+Route::get('cfdi/{uuid}/pdf', [FacturacionController::class, 'downloadPdfPublico']);
+Route::get('cfdi/{uuid}/xml', [FacturacionController::class, 'downloadXmlPublico']);
+Route::get('cfdi/{uuid}/zip', [FacturacionController::class, 'downloadZipPublico']);
+
 // Mercado Libre OAuth callback (no auth required - ML redirects here)
 Route::get('mercado-libre/callback', [MercadoLibreController::class, 'callback'])->name('mercado-libre.callback');
 
 // Mercado Libre webhook (no auth required - ML sends directly)
 Route::post('mercado-libre/webhook', [MercadoLibreController::class, 'webhook']);
-

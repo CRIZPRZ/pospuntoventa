@@ -24,6 +24,22 @@ class SucursalController extends Controller
 
     public function store(Request $request)
     {
+        $empresa = $request->user()?->empresa?->loadMissing('plan');
+        if (! $empresa) {
+            return response()->json(['message' => 'Empresa no encontrada'], 422);
+        }
+
+        $limiteSucursales = $empresa->limiteSucursales();
+        $sucursalesActivas = Sucursal::where('empresa_id', $empresa->id)
+            ->where('activo', true)
+            ->count();
+
+        if ($limiteSucursales !== -1 && $sucursalesActivas >= $limiteSucursales) {
+            return response()->json([
+                'message' => "Tu plan permite hasta {$limiteSucursales} sucursal(es). Actualiza tu plan para agregar otra.",
+            ], 422);
+        }
+
         $data = $request->validate([
             'nombre'       => 'required|string|max:120',
             'direccion'    => 'nullable|string|max:255',

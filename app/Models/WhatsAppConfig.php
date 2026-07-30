@@ -13,6 +13,7 @@ class WhatsAppConfig extends Model
         'empresa_id',
         'sucursal_id',
         'provider',
+        'session_key',
         'business_name',
         'phone_number',
         'display_name',
@@ -21,12 +22,16 @@ class WhatsAppConfig extends Model
         'whatsapp_business_account_id',
         'access_token',
         'status',
+        'connected_at',
+        'disconnected_at',
         'last_test_at',
         'last_error',
     ];
 
     protected $casts = [
         'access_token' => 'encrypted',
+        'connected_at' => 'datetime',
+        'disconnected_at' => 'datetime',
         'last_test_at' => 'datetime',
     ];
 

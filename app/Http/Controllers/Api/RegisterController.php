@@ -5,12 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Mail\WelcomeMail;
 use App\Models\Empresa;
-use App\Models\Plan;
 use App\Models\Sucursal;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -22,7 +23,7 @@ class RegisterController extends Controller
         'productos', 'categorias', 'clientes', 'abonos',
         'reportes', 'proveedores', 'pagos_proveedores',
         'cotizaciones', 'pedidos', 'usuarios', 'roles',
-        'sucursales', 'configuracion', 'camaras', 'ubicaciones',
+        'configuracion', 'camaras',
     ];
 
     public function register(Request $request)
@@ -31,23 +32,40 @@ class RegisterController extends Controller
             'empresa_nombre' => ['required', 'string', 'max:255'],
             'email'          => ['required', 'email', 'max:255', 'unique:users,email'],
             'password'       => ['required', 'string', 'min:8', 'confirmed'],
-            'plan_id'        => ['nullable', 'integer', 'exists:planes,id'],
+            'plan_id'        => ['nullable', 'integer'],
+            'website'        => ['nullable', 'max:0'],
+            'flow_started_at'=> ['nullable', 'integer'],
         ]);
 
-        $plan = isset($data['plan_id']) ? Plan::find($data['plan_id']) : null;
+        if (! empty($data['website'])) {
+            Log::warning('Registro bloqueado por honeypot', ['ip' => $request->ip(), 'email' => $data['email'] ?? null]);
+            return response()->json(['message' => 'No se pudo procesar el registro.'], 422);
+        }
+
+        if (! empty($data['flow_started_at'])) {
+            $startedAt = Carbon::createFromTimestampMs((int) $data['flow_started_at']);
+
+            if ($startedAt->greaterThan(now()->subSeconds(2))) {
+                Log::warning('Registro bloqueado por tiempo mínimo del formulario', [
+                    'ip' => $request->ip(),
+                    'email' => $data['email'] ?? null,
+                ]);
+                return response()->json(['message' => 'Confirma tus datos y vuelve a intentarlo.'], 422);
+            }
+        }
 
         // Crear empresa
         $empresa = Empresa::create([
             'nombre'             => $data['empresa_nombre'],
             'slug'               => Empresa::generarSlug($data['empresa_nombre']),
             'email'              => $data['email'],
-            'plan_id'            => $plan?->id,
             'plan_estado'        => 'trial',
             'plan_vigente_hasta' => now()->addDays(14),
         ]);
 
-        // Sincronizar módulos del plan seleccionado (o los módulos de trial por defecto)
-        $modulosActivos = $plan ? ($plan->modulos ?? self::MODULOS_TRIAL) : self::MODULOS_TRIAL;
+        // Trial siempre usa los módulos propios del trial.
+        // La selección de plan en registro es solo intención comercial hasta pagar.
+        $modulosActivos = self::MODULOS_TRIAL;
         foreach ($modulosActivos as $key) {
             $empresa->modulos()->create(['modulo_key' => $key, 'activo' => true]);
         }

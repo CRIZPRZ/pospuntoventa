@@ -536,13 +536,11 @@ class CotizacionController extends Controller
         $publicConfig = $svc->resolvePublicConfig((int) $cotizacion->empresa_id, $sucursalId);
         $technicalConfig = $svc->resolveTechnicalConfig((int) $cotizacion->empresa_id, $sucursalId);
 
-        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
+        if (!$svc->isConnected($technicalConfig)) {
             return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
         }
 
-        $businessName = $technicalConfig->display_name
-            ?: $technicalConfig->business_name
-            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+        $businessName = $svc->resolveBusinessName((int) $cotizacion->empresa_id, $sucursalId, $technicalConfig, $publicConfig);
 
         $itemLines = $cotizacion->items->take(5)->map(function ($item) {
             return '▸ ' . ($item->descripcion ?? $item->nombre_producto ?? '—') . ' × ' . (int) $item->cantidad

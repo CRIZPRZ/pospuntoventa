@@ -4,17 +4,32 @@ namespace App\Http\Controllers\Api\SuperAdmin;
 
 use App\Http\Controllers\Controller;
 use App\Models\SuperAdminConfig;
-use App\Services\FacturapiService;
+use App\Services\Pac\PacManager;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class ConfigFiscalController extends Controller
 {
-    private FacturapiService $facturapi;
-
-    public function __construct(FacturapiService $facturapi)
+    private function ctx(): array
     {
-        $this->facturapi = $facturapi;
+        $ambiente = SuperAdminConfig::get('fiscal_ambiente', 'test');
+
+        return [
+            'rfc'            => strtoupper(trim(SuperAdminConfig::get('fiscal_rfc', ''))),
+            'nombre'         => SuperAdminConfig::get('fiscal_razon_social', ''),
+            'nombre_sat'     => SuperAdminConfig::get('fiscal_razon_social', ''),
+            'regimen_fiscal' => SuperAdminConfig::get('fiscal_regimen_fiscal', '601'),
+            'codigo_postal'  => SuperAdminConfig::get('fiscal_codigo_postal', ''),
+            'ambiente'       => $ambiente,
+            'org_id'         => SuperAdminConfig::get('fiscal_facturapi_org_id'),
+            'org_key'        => $ambiente === 'live'
+                ? SuperAdminConfig::get('fiscal_facturapi_live_key')
+                : SuperAdminConfig::get('fiscal_facturapi_test_key'),
+        ];
+    }
+
+    private function pac()
+    {
+        return PacManager::make(SuperAdminConfig::get('fiscal_pac_provider', 'facturama'));
     }
 
     /** GET /api/superadmin/config-fiscal */
@@ -27,9 +42,10 @@ class ConfigFiscalController extends Controller
                 'regimen_fiscal'   => SuperAdminConfig::get('fiscal_regimen_fiscal'),
                 'codigo_postal'    => SuperAdminConfig::get('fiscal_codigo_postal'),
                 'serie'            => SuperAdminConfig::get('fiscal_serie', 'SS'),
-                'ambiente'         => SuperAdminConfig::get('fiscal_ambiente', 'test'),
                 'facturapi_org_id' => SuperAdminConfig::get('fiscal_facturapi_org_id'),
                 'csd_subido'       => (bool) SuperAdminConfig::get('fiscal_csd_subido'),
+                'csd_vigencia'     => SuperAdminConfig::get('fiscal_csd_vigencia'),
+                'pac_provider'     => SuperAdminConfig::get('fiscal_pac_provider', 'facturama'),
             ],
         ]);
     }
@@ -43,92 +59,64 @@ class ConfigFiscalController extends Controller
             'regimen_fiscal' => 'nullable|string|max:10',
             'codigo_postal'  => 'nullable|string|max:10',
             'serie'          => 'nullable|string|max:5',
-            'ambiente'       => 'nullable|in:test,live',
+            'pac_provider'   => 'nullable|in:facturapi,facturama,sw_sapiens',
         ]);
 
         foreach ($data as $key => $value) {
             SuperAdminConfig::set("fiscal_{$key}", $value);
         }
 
-        // Si ya existe org en Facturapi, sincronizar datos legales
-        $orgId = SuperAdminConfig::get('fiscal_facturapi_org_id');
-        if ($orgId) {
-            $rfc    = SuperAdminConfig::get('fiscal_rfc');
-            $nombre = SuperAdminConfig::get('fiscal_razon_social');
-            $regimen = SuperAdminConfig::get('fiscal_regimen_fiscal');
-            $cp      = SuperAdminConfig::get('fiscal_codigo_postal');
-
-            if ($rfc && $nombre && $regimen && $cp) {
-                try {
-                    $this->facturapi->actualizarLegalOrg($orgId, [
-                        'legal_name' => $nombre,
-                        'tax_id'     => strtoupper($rfc),
-                        'tax_system' => $regimen,
-                        'address'    => ['zip' => $cp],
-                    ]);
-                } catch (\Throwable $e) {
-                    // No romper guardado si Facturapi falla — se puede reintentar
-                    \Illuminate\Support\Facades\Log::warning("ConfigFiscal: error sync Facturapi org: {$e->getMessage()}");
-                }
+        // Si cambió a Facturama/SW Sapiens, marcar csd_subido=false para forzar re-subida
+        if (isset($data['pac_provider']) && $data['pac_provider'] !== 'facturapi') {
+            $csdSubido = SuperAdminConfig::get('fiscal_csd_subido');
+            // Solo resetear si venía de Facturapi (tiene org_id pero no es multi-emisor)
+            if (SuperAdminConfig::get('fiscal_facturapi_org_id') && !$csdSubido) {
+                SuperAdminConfig::set('fiscal_csd_subido', false);
             }
         }
 
         return response()->json(['message' => 'Configuración guardada']);
     }
 
-    /** POST /api/superadmin/config-fiscal/setup-facturapi
-     *  Crea organización Facturapi para el superadmin (si no existe)
-     */
+    /** POST /api/superadmin/config-fiscal/setup-facturapi */
     public function setupFacturapi(Request $request)
     {
-        $orgId = SuperAdminConfig::get('fiscal_facturapi_org_id');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $ctx      = $this->ctx();
 
-        if (! $orgId) {
-            $nombre = SuperAdminConfig::get('fiscal_razon_social', 'Ventas POS SAAS');
-            $orgId  = $this->facturapi->crearOrganizacion($nombre);
-            SuperAdminConfig::set('fiscal_facturapi_org_id', $orgId);
-        }
+        if ($provider === 'facturapi') {
+            $facturapi = app(\App\Services\FacturapiService::class);
+            $orgId     = SuperAdminConfig::get('fiscal_facturapi_org_id');
 
-        $ambiente = SuperAdminConfig::get('fiscal_ambiente', 'test');
-
-        // Obtener la API key correcta
-        if ($ambiente === 'live') {
-            $apiKey = $this->facturapi->getLiveApiKey($orgId);
-            SuperAdminConfig::set('fiscal_facturapi_live_key', $apiKey);
-        } else {
-            $apiKey = $this->facturapi->getTestApiKey($orgId);
-            SuperAdminConfig::set('fiscal_facturapi_test_key', $apiKey);
-        }
-
-        // Sincronizar datos legales si ya están guardados
-        $rfc    = SuperAdminConfig::get('fiscal_rfc');
-        $nombre = SuperAdminConfig::get('fiscal_razon_social');
-        $regimen = SuperAdminConfig::get('fiscal_regimen_fiscal');
-        $cp      = SuperAdminConfig::get('fiscal_codigo_postal');
-
-        if ($rfc && $nombre && $regimen && $cp) {
-            try {
-                $this->facturapi->actualizarLegalOrg($orgId, [
-                    'legal_name' => $nombre,
-                    'tax_id'     => strtoupper($rfc),
-                    'tax_system' => $regimen,
-                    'address'    => ['zip' => $cp],
-                ]);
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning("setupFacturapi: sync legal error: {$e->getMessage()}");
+            if (!$orgId) {
+                $nombre = SuperAdminConfig::get('fiscal_razon_social', 'Ventas POS SAAS');
+                $orgId  = $facturapi->crearOrganizacion($nombre);
+                SuperAdminConfig::set('fiscal_facturapi_org_id', $orgId);
             }
+
+            $ambiente = SuperAdminConfig::get('fiscal_ambiente', 'test') === 'live' ? 'live' : 'test';
+            if ($ambiente === 'live') {
+                $apiKey = $facturapi->getLiveApiKey($orgId);
+                SuperAdminConfig::set('fiscal_facturapi_live_key', $apiKey);
+            } else {
+                $apiKey = $facturapi->getTestApiKey($orgId);
+                SuperAdminConfig::set('fiscal_facturapi_test_key', $apiKey);
+            }
+
+            return response()->json(['message' => 'Conexión verificada correctamente', 'org_id' => $orgId]);
         }
 
-        return response()->json([
-            'message'  => 'Organización Facturapi configurada',
-            'org_id'   => $orgId,
-            'ambiente' => $ambiente,
-        ]);
+        // Facturama / SW Sapiens: setup es no-op, solo verificar conexión
+        try {
+            $this->pac()->test($ctx);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Conexión verificada correctamente']);
     }
 
-    /** POST /api/superadmin/config-fiscal/upload-csd
-     *  Sube certificados CSD a la organización Facturapi del superadmin
-     */
+    /** POST /api/superadmin/config-fiscal/upload-csd */
     public function uploadCsd(Request $request)
     {
         $request->validate([
@@ -137,46 +125,75 @@ class ConfigFiscalController extends Controller
             'password' => 'required|string',
         ]);
 
-        $orgId = SuperAdminConfig::get('fiscal_facturapi_org_id');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $ctx      = $this->ctx();
 
-        if (! $orgId) {
-            return response()->json(['message' => 'Primero configura la organización Facturapi'], 422);
+        if ($provider === 'facturapi') {
+            $orgId = SuperAdminConfig::get('fiscal_facturapi_org_id');
+            if (!$orgId) {
+                return response()->json(['message' => 'Primero configura la organización Facturapi'], 422);
+            }
+            $facturapi = app(\App\Services\FacturapiService::class);
+            $facturapi->subirCsd($orgId, $request->cer, $request->key, $request->password);
+        } else {
+            $this->pac()->subirCsd($ctx, $request->cer, $request->key, $request->password);
         }
 
-        // subirCsd usa el userKey() internamente — solo necesita orgId
-        $this->facturapi->subirCsd($orgId, $request->cer, $request->key, $request->password);
+        $vigencia = $this->extractCsdVigencia($request->cer);
         SuperAdminConfig::set('fiscal_csd_subido', true);
+        if ($vigencia) SuperAdminConfig::set('fiscal_csd_vigencia', $vigencia);
 
-        return response()->json(['message' => 'CSD subido correctamente']);
+        return response()->json([
+            'message'      => 'CSD subido correctamente',
+            'csd_vigencia' => $vigencia,
+        ]);
     }
 
-    /** DELETE /api/superadmin/config-fiscal/reset
-     *  Borra toda la config fiscal local para empezar de cero.
-     *  La org en Facturapi queda huérfana (sandbox — no importa).
-     */
+    /** POST /api/superadmin/config-fiscal/test */
+    public function test()
+    {
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $ctx      = $this->ctx();
+
+        if ($provider === 'facturapi') {
+            $apiKey = $ctx['org_key'];
+            if (!$apiKey) {
+                return response()->json(['message' => 'No hay API key configurada'], 422);
+            }
+            $facturapi = app(\App\Services\FacturapiService::class);
+            $ok = $facturapi->testOrg($apiKey);
+            return response()->json(['ok' => $ok, 'message' => $ok ? 'Conexión verificada correctamente' : 'Error de conexión']);
+        }
+
+        try {
+            $this->pac()->test($ctx);
+            return response()->json(['ok' => true, 'message' => 'Conexión verificada correctamente']);
+        } catch (\Exception $e) {
+            return response()->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /** DELETE /api/superadmin/config-fiscal/reset */
     public function reset()
     {
         \App\Models\SuperAdminConfig::where('key', 'like', 'fiscal_%')->delete();
         return response()->json(['message' => 'Configuración fiscal reiniciada']);
     }
 
-    /** POST /api/superadmin/config-fiscal/test */
-    public function test()
+    private function extractCsdVigencia(string $cerBase64): ?string
     {
-        $ambiente = SuperAdminConfig::get('fiscal_ambiente', 'test');
-        $apiKey   = $ambiente === 'live'
-            ? SuperAdminConfig::get('fiscal_facturapi_live_key')
-            : SuperAdminConfig::get('fiscal_facturapi_test_key');
-
-        if (! $apiKey) {
-            return response()->json(['message' => 'No hay API key configurada'], 422);
-        }
-
-        $ok = $this->facturapi->testOrg($apiKey);
-
-        return response()->json([
-            'ok'      => $ok,
-            'message' => $ok ? 'Conexión exitosa con Facturapi' : 'Error de conexión',
-        ]);
+        try {
+            $derBin = base64_decode($cerBase64);
+            $tmpFile = tempnam(sys_get_temp_dir(), 'cer_');
+            file_put_contents($tmpFile, $derBin);
+            $output = shell_exec("openssl x509 -inform DER -noout -enddate -in " . escapeshellarg($tmpFile) . " 2>/dev/null");
+            unlink($tmpFile);
+            if ($output && preg_match('/notAfter=(.+)/', trim($output), $m)) {
+                $dt = \DateTime::createFromFormat('M j H:i:s Y T', trim($m[1]));
+                if (!$dt) $dt = new \DateTime(trim($m[1]));
+                return $dt ? $dt->format('Y-m-d') : null;
+            }
+        } catch (\Throwable $e) {}
+        return null;
     }
 }

@@ -33,6 +33,27 @@ class FacturacionController extends Controller
         return $row?->config ?? [];
     }
 
+    private function extractCsdVigencia(string $cerBase64): ?string
+    {
+        try {
+            $tmp = tempnam(sys_get_temp_dir(), 'cer_');
+            file_put_contents($tmp, base64_decode($cerBase64));
+            $output = [];
+            exec('openssl x509 -inform DER -in ' . escapeshellarg($tmp) . ' -noout -enddate 2>&1', $output);
+            @unlink($tmp);
+            // notAfter=May  9 06:00:00 2028 GMT
+            $line = implode('', $output);
+            if (preg_match('/notAfter=(.+)/i', $line, $m)) {
+                $date = \DateTime::createFromFormat('M  j H:i:s Y T', trim($m[1]))
+                    ?: \DateTime::createFromFormat('M j H:i:s Y T', trim($m[1]));
+                return $date ? $date->format('Y-m-d') : trim($m[1]);
+            }
+            return null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     private function saveFacturacion(array $patch): void
     {
         $config              = $this->getConfig();
@@ -65,6 +86,36 @@ class FacturacionController extends Controller
         return new FacturapiService();
     }
 
+    private function empresa(): ?\App\Models\Empresa
+    {
+        return \App\Models\Empresa::find($this->empresaId());
+    }
+
+    private function pac(): \App\Services\Pac\PacContract
+    {
+        return \App\Services\Pac\PacManager::for($this->empresa());
+    }
+
+    /** Construye el contexto del emisor (datos + credenciales resueltas) para el PAC. */
+    private function emisorCtx(): array
+    {
+        $config  = $this->getConfig();
+        $empresa = $config['empresa'] ?? [];
+        $f       = $config['facturacion'] ?? [];
+
+        return [
+            'ambiente'       => ($f['ambiente'] ?? 'test') === 'live' ? 'live' : 'test',
+            'rfc'            => strtoupper(trim($empresa['rfc'] ?? '')),
+            'nombre'         => $empresa['nombre'] ?? 'Mi Empresa',
+            // nombre_sat: nombre exacto del SAT extraído del .cer al subir CSD (Facturama lo requiere)
+            'nombre_sat'     => $f['nombre_sat'] ?? null,
+            'regimen_fiscal' => $f['regimen_fiscal'] ?? '601',
+            'codigo_postal'  => $f['codigo_postal'] ?? '',
+            'org_id'         => $f['facturapi_org_id'] ?? null,
+            'org_key'        => $this->orgKey(),
+        ];
+    }
+
     /** Obtiene y guarda las API keys de la org desde Facturapi. */
     private function fetchAndSaveOrgKeys(string $orgId): void
     {
@@ -86,10 +137,6 @@ class FacturacionController extends Controller
 
     public function setup(Request $request)
     {
-        if (!config('services.facturapi.user_key')) {
-            return response()->json(['message' => 'FACTURAPI_USER_KEY no configurado en el servidor'], 500);
-        }
-
         $config  = $this->getConfig();
         $empresa = $config['empresa'] ?? [];
 
@@ -98,8 +145,25 @@ class FacturacionController extends Controller
         }
 
         $facturacion = $config['facturacion'] ?? [];
+        $pac         = $this->pac();
 
-        // Si ya tiene org, solo devolver estado actual
+        // Facturama: el emisor existe al cargar su CSD — no hay organización que crear.
+        if ($pac->key() === 'facturama') {
+            if (empty(strtoupper(trim($empresa['rfc'] ?? '')))) {
+                return response()->json(['message' => 'Captura el RFC del negocio en la pestaña Empresa antes de continuar'], 422);
+            }
+            $this->saveFacturacion(['emisor_registrado' => true]);
+            return response()->json([
+                'message'    => 'Emisor listo. Sube tu CSD para comenzar a facturar.',
+                'csd_subido' => (bool) ($facturacion['csd_subido'] ?? false),
+            ]);
+        }
+
+        // Facturapi: crear organización (o devolver la existente).
+        if (!config('services.facturapi.user_key')) {
+            return response()->json(['message' => 'FACTURAPI_USER_KEY no configurado en el servidor'], 500);
+        }
+
         if (!empty($facturacion['facturapi_org_id'])) {
             return response()->json([
                 'message'    => 'Organización ya existente',
@@ -109,27 +173,15 @@ class FacturacionController extends Controller
         }
 
         try {
-            $fp    = $this->facturapi();
-            $orgId = $fp->crearOrganizacion($empresa['nombre']);
+            $result = $pac->setup($this->emisorCtx());
+            $orgId  = $result['org_id'] ?? '';
 
             $this->saveFacturacion([
                 'facturapi_org_id' => $orgId,
                 'csd_subido'       => false,
             ]);
 
-            // Obtener y guardar las API keys de la nueva org
             $this->fetchAndSaveOrgKeys($orgId);
-
-            // Actualizar datos legales si la empresa tiene RFC y CP configurados
-            $rfc = strtoupper(trim($empresa['rfc'] ?? ''));
-            $cp  = $facturacion['codigo_postal'] ?? '';
-            if ($cp) {
-                $fp->actualizarLegalOrg($orgId, [
-                    'name'       => mb_strtoupper($empresa['nombre']),
-                    'tax_system' => $facturacion['regimen_fiscal'] ?? '601',
-                    'address'    => ['zip' => $cp],
-                ]);
-            }
 
             return response()->json([
                 'message' => 'Organización creada en Facturapi',
@@ -199,23 +251,42 @@ class FacturacionController extends Controller
             'password' => 'required|string',
         ]);
 
-        $f = $this->facturacion();
+        $pac = $this->pac();
+        $ctx = $this->emisorCtx();
 
-        if (empty($f['facturapi_org_id'])) {
-            return response()->json(['message' => 'Crea la organización en Facturapi primero'], 422);
+        // Facturapi requiere org creada previamente
+        if ($pac->key() === 'facturapi') {
+            $f = $this->facturacion();
+            if (empty($f['facturapi_org_id'])) {
+                return response()->json(['message' => 'Crea la organización en Facturapi primero'], 422);
+            }
+        }
+
+        if (empty($ctx['rfc'])) {
+            return response()->json(['message' => 'Configura el RFC del negocio antes de subir el CSD'], 422);
         }
 
         try {
-            $this->facturapi()->subirCsd(
-                $f['facturapi_org_id'],
-                $request->cer,
-                $request->key,
-                $request->password
-            );
+            $nombreSat  = null;
+            $csdVigencia = null;
 
-            $this->saveFacturacion(['csd_subido' => true]);
+            if (method_exists($pac, 'extractNombreFromCer')) {
+                $nombreSat = $pac->extractNombreFromCer($request->cer);
+            }
+            $csdVigencia = $this->extractCsdVigencia($request->cer);
 
-            return response()->json(['message' => 'CSD registrado correctamente']);
+            $pac->subirCsd($ctx, $request->cer, $request->key, $request->password);
+
+            $saveData = ['csd_subido' => true];
+            if ($nombreSat)   $saveData['nombre_sat']   = $nombreSat;
+            if ($csdVigencia) $saveData['csd_vigencia'] = $csdVigencia;
+            $this->saveFacturacion($saveData);
+
+            return response()->json([
+                'message'      => 'CSD registrado correctamente',
+                'nombre_sat'   => $nombreSat,
+                'csd_vigencia' => $csdVigencia,
+            ]);
         } catch (\Exception $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -223,26 +294,30 @@ class FacturacionController extends Controller
 
     public function test()
     {
-        $f     = $this->facturacion();
-        $orgId = $f['facturapi_org_id'] ?? '';
+        $pac = $this->pac();
+        $ctx = $this->emisorCtx();
 
-        if (!$orgId) {
-            return response()->json(['needs_reconnect' => true, 'message' => 'Configura la facturación primero.'], 422);
-        }
+        // Facturapi: requiere org + keys
+        if ($pac->key() === 'facturapi') {
+            $f     = $this->facturacion();
+            $orgId = $f['facturapi_org_id'] ?? '';
 
-        // Si no hay keys guardadas, obtenerlas de Facturapi
-        if (!$this->orgKey()) {
-            $this->fetchAndSaveOrgKeys($orgId);
-        }
+            if (!$orgId) {
+                return response()->json(['needs_reconnect' => true, 'message' => 'Configura la facturación primero.'], 422);
+            }
 
-        $key = $this->orgKey();
-        if (!$key) {
-            return response()->json(['needs_reconnect' => true, 'message' => 'No se pudieron obtener las credenciales de facturación. Reconecta tu cuenta.'], 422);
+            if (!$this->orgKey()) {
+                $this->fetchAndSaveOrgKeys($orgId);
+            }
+
+            if (!$this->orgKey()) {
+                return response()->json(['needs_reconnect' => true, 'message' => 'No se pudieron obtener las credenciales de facturación. Reconecta tu cuenta.'], 422);
+            }
         }
 
         try {
-            $this->facturapi()->testOrg($key);
-            return response()->json(['message' => 'Conexión con Facturapi exitosa']);
+            $pac->test($ctx);
+            return response()->json(['message' => 'Conexión con el PAC exitosa']);
         } catch (\Exception $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -260,36 +335,6 @@ class FacturacionController extends Controller
             return response()->json(['message' => 'No se puede facturar una venta cancelada'], 422);
         }
 
-        // Verificar límite de timbres del plan (superadmin siempre puede)
-        if (! $request->user()->is_superadmin) {
-            $empresa          = $request->user()->empresa;
-            $timbresIncluidos = $empresa?->plan?->timbres_incluidos ?? 0;
-            $timbresExtra     = (int) ($empresa?->timbres_extra ?? 0);
-
-            if ($timbresIncluidos !== -1) { // -1 = ilimitado
-                $timbresUsados = DB::table('ventas')
-                    ->where('empresa_id', $this->empresaId())
-                    ->whereNotNull('cfdi_uuid')
-                    ->whereYear('created_at', now()->year)
-                    ->whereMonth('created_at', now()->month)
-                    ->count();
-
-                if ($timbresUsados >= $timbresIncluidos) {
-                    // Cuota mensual agotada — consumir timbres_extra si hay
-                    if ($timbresExtra > 0) {
-                        $empresa->decrement('timbres_extra');
-                    } else {
-                        return response()->json([
-                            'message'          => "Límite de timbres alcanzado ({$timbresUsados}/{$timbresIncluidos} este mes). Compra timbres adicionales en Mi Plan.",
-                            'timbres_usados'   => $timbresUsados,
-                            'timbres_incluidos'=> $timbresIncluidos,
-                            'timbres_extra'    => 0,
-                        ], 422);
-                    }
-                }
-            }
-        }
-
         $config      = $this->getConfig();
         $facturacion = $config['facturacion'] ?? [];
 
@@ -297,67 +342,140 @@ class FacturacionController extends Controller
             return response()->json(['message' => 'Sube el CSD antes de facturar (Configuración → Facturación)'], 422);
         }
 
-        $orgKey = $this->orgKey();
-        if (!$orgKey) {
+        // Facturapi: requiere org key
+        $pac = $this->pac();
+        if ($pac->key() === 'facturapi' && !$this->orgKey()) {
             return response()->json(['message' => 'La facturación no está configurada. Ve a Configuración → Facturación.'], 422);
         }
 
         $receptor = $request->input('receptor', []);
         $venta->load('items.producto', 'cliente');
 
+        // ── Créditos atómicos (race-condition-safe) ───────────────────────────
+        $usarExtra       = false;
+        $usarCredito     = false;
+        $costoTimbre     = 0;
+        $isSuperadmin    = $request->user()->is_superadmin;
+
+        if (!$isSuperadmin) {
+            try {
+                DB::transaction(function () use ($request, &$usarExtra, &$usarCredito, &$costoTimbre) {
+                    $empresa = \App\Models\Empresa::lockForUpdate()->find($this->empresaId());
+                    if (!$empresa) throw new \Exception('Empresa no encontrada');
+
+                    $esCustom         = ($empresa->plan?->tipo ?? '') === 'manual';
+                    $timbresIncluidos = (int) ($empresa->plan?->timbres_incluidos ?? 0);
+
+                    // Plan custom/manual → sistema de créditos en pesos
+                    if ($esCustom) {
+                        $credito = (float) ($empresa->credito_timbres ?? 0);
+                        $costo   = (float) ($empresa->costo_timbre ?? 2);
+                        if ($credito < $costo) {
+                            $creditoFmt = number_format($credito, 2);
+                            $costoFmt   = number_format($costo, 2);
+                            throw new \Exception(
+                                "Crédito insuficiente (disponible: \${$creditoFmt} MXN, necesario: \${$costoFmt} MXN). Recarga tu saldo para continuar facturando."
+                            );
+                        }
+                        $usarCredito = true;
+                        $costoTimbre = $costo;
+                        return;
+                    }
+
+                    // Plan regular → cuota mensual de timbres
+                    if ($timbresIncluidos === -1) return; // ilimitado
+
+                    $timbresExtra  = (int) ($empresa->timbres_extra ?? 0);
+                    $timbresUsados = \App\Models\TimbreConsumo::where('empresa_id', $empresa->id)
+                        ->whereYear('created_at', now()->year)
+                        ->whereMonth('created_at', now()->month)
+                        ->count();
+
+                    if ($timbresUsados < $timbresIncluidos) return; // cuota mensual disponible
+
+                    if ($timbresExtra > 0) {
+                        $usarExtra = true;
+                        return;
+                    }
+
+                    throw new \Exception(
+                        "Límite de timbres alcanzado ({$timbresUsados}/{$timbresIncluidos} este mes). Compra timbres adicionales en Mi Plan."
+                    );
+                });
+            } catch (\Exception $e) {
+                return response()->json([
+                    'message' => $e->getMessage(),
+                ], 422);
+            }
+        }
+
+        // ── Timbrar ───────────────────────────────────────────────────────────
         try {
-            $fp      = $this->facturapi();
-            $payload = $this->buildPayload($venta, $config, $receptor);
-            $invoice = $fp->crearFactura($orgKey, $payload);
+            $invoice     = $this->buildNormalizedInvoice($venta, $config, $receptor);
+            $ctx         = $this->emisorCtx();
+            $result      = $pac->crearFactura($ctx, $invoice);
 
-            $uuid = $invoice['uuid'] ?? null;
-            $id   = $invoice['id']   ?? null;
+            $uuid  = $result['uuid']   ?? null;
+            $pacId = $result['pac_id'] ?? null;
+            $xml   = $result['xml']    ?? null;
 
-            $xml = $id ? $fp->descargarXml($orgKey, $id) : null;
+            $updateData = [
+                'cfdi_uuid'     => $uuid,
+                'cfdi_pac_id'   => $pacId,
+                'cfdi_pac'      => $pac->key(),
+                'cfdi_xml'      => $xml,
+                'cfdi_status'   => 'timbrado',
+                'cfdi_receptor' => $receptor ?: null,
+            ];
 
-            $venta->update([
-                'cfdi_uuid'         => $uuid,
-                'cfdi_facturapi_id' => $id,
-                'cfdi_xml'          => $xml,
-                'cfdi_status'       => 'timbrado',
-                'cfdi_receptor'     => $receptor ?: null,
-            ]);
+            // Si la venta no tenía cliente y se timbró con uno, ligar la venta al cliente.
+            $clienteIdReceptor = $receptor['cliente_id'] ?? null;
+            if ($clienteIdReceptor && !$venta->cliente_id) {
+                $updateData['cliente_id'] = (int) $clienteIdReceptor;
+            }
 
-            // Enviar CFDI por correo — prioridad: cliente_id del receptor, luego cliente de la venta
+            $venta->update($updateData);
+
+            // Registrar consumo de timbre (solo tras timbrado exitoso)
+            if (!$isSuperadmin) {
+                \App\Models\TimbreConsumo::create([
+                    'empresa_id'  => $this->empresaId(),
+                    'sucursal_id' => $venta->sucursal_id,
+                    'venta_id'    => $venta->id,
+                    'pac'         => $pac->key(),
+                    'uuid'        => $uuid,
+                ]);
+
+                if ($usarCredito && $costoTimbre > 0) {
+                    \App\Models\Empresa::where('id', $this->empresaId())
+                        ->where('credito_timbres', '>=', $costoTimbre)
+                        ->decrement('credito_timbres', $costoTimbre);
+                } elseif ($usarExtra) {
+                    \App\Models\Empresa::where('id', $this->empresaId())
+                        ->where('timbres_extra', '>', 0)
+                        ->decrement('timbres_extra');
+                }
+            }
+
+            // ── Email ─────────────────────────────────────────────────────────
             $emailDestinatario = null;
             $clienteIdReceptor = $receptor['cliente_id'] ?? null;
             if ($clienteIdReceptor) {
                 $clienteReceptor   = \App\Models\Cliente::find($clienteIdReceptor);
                 $emailDestinatario = $clienteReceptor?->email;
             }
-            if (!$emailDestinatario) {
-                $emailDestinatario = $venta->cliente?->email;
-            }
-            // Email manual capturado en el form cuando no hay cliente registrado
-            if (!$emailDestinatario && !empty($receptor['email'])) {
-                $emailDestinatario = $receptor['email'];
-            }
-            // Guardar email en cfdi_receptor para reenvíos futuros
-            if ($emailDestinatario && !empty($receptor)) {
-                $receptor['email'] = $emailDestinatario;
-            }
+            if (!$emailDestinatario) $emailDestinatario = $venta->cliente?->email;
+            if (!$emailDestinatario && !empty($receptor['email'])) $emailDestinatario = $receptor['email'];
+            if ($emailDestinatario && !empty($receptor)) $receptor['email'] = $emailDestinatario;
 
             $emailEnviado = false;
             $emailError   = null;
 
-            Log::info('CFDI email debug', [
-                'venta_id'          => $venta->id,
-                'cliente_id_venta'  => $venta->cliente_id,
-                'cliente_id_receptor' => $clienteIdReceptor,
-                'email_destinatario' => $emailDestinatario,
-                'uuid'              => $uuid,
-            ]);
-
             if ($emailDestinatario && $uuid) {
                 try {
                     $pdfContent = null;
-                    if ($id) {
-                        try { $pdfContent = $fp->descargarPdf($orgKey, $id); } catch (\Exception $e) {
+                    if ($pacId) {
+                        try { $pdfContent = $pac->descargarPdf(array_merge($ctx, ['cfdi_xml' => $xml]), $pacId); } catch (\Exception $e) {
                             Log::warning('Error descargando PDF para email CFDI: ' . $e->getMessage());
                         }
                     }
@@ -383,11 +501,29 @@ class FacturacionController extends Controller
 
     public function downloadXml(Venta $venta)
     {
-        if (!$venta->cfdi_xml) {
+        if (!$venta->cfdi_uuid) {
             return response()->json(['message' => 'Sin CFDI'], 404);
         }
 
-        return response($venta->cfdi_xml, 200, [
+        $xml = $venta->cfdi_xml;
+
+        // Si no está en DB, intentar obtener del PAC en tiempo real.
+        if (!$xml && $venta->cfdi_pac_id) {
+            try {
+                $pac = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?? 'facturama');
+                $xml = $pac->descargarXml($this->emisorCtx(), $venta->cfdi_pac_id);
+                // Guardar para futuros requests.
+                $venta->update(['cfdi_xml' => $xml]);
+            } catch (\Exception $e) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+        }
+
+        if (!$xml) {
+            return response()->json(['message' => 'El XML del CFDI no está disponible'], 404);
+        }
+
+        return response($xml, 200, [
             'Content-Type'        => 'application/xml',
             'Content-Disposition' => "attachment; filename=\"CFDI_{$venta->folio}_{$venta->cfdi_uuid}.xml\"",
         ]);
@@ -395,14 +531,15 @@ class FacturacionController extends Controller
 
     public function downloadPdf(Venta $venta)
     {
-        if (!$venta->cfdi_facturapi_id) {
+        if (!$venta->cfdi_pac_id) {
             return response()->json(['message' => 'Sin CFDI'], 404);
         }
 
-        $orgKey = $this->orgKey();
+        $pac = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?? 'facturama');
+        $ctx = array_merge($this->emisorCtx(), ['cfdi_xml' => $venta->cfdi_xml]);
 
         try {
-            $pdf = $this->facturapi()->descargarPdf($orgKey, $venta->cfdi_facturapi_id);
+            $pdf = $pac->descargarPdf($ctx, $venta->cfdi_pac_id);
 
             return response($pdf, 200, [
                 'Content-Type'        => 'application/pdf',
@@ -431,8 +568,9 @@ class FacturacionController extends Controller
         $receptor = $venta->cfdi_receptor ?? [];
 
         $pdfContent = null;
-        if ($venta->cfdi_facturapi_id) {
-            try { $pdfContent = $this->facturapi()->descargarPdf($this->orgKey(), $venta->cfdi_facturapi_id); } catch (\Exception $e) {}
+        if ($venta->cfdi_pac_id) {
+            $pacReenvio = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?? 'facturama');
+            try { $pdfContent = $pacReenvio->descargarPdf(array_merge($this->emisorCtx(), ['cfdi_xml' => $venta->cfdi_xml]), $venta->cfdi_pac_id); } catch (\Exception $e) {}
         }
 
         try {
@@ -541,68 +679,71 @@ class FacturacionController extends Controller
 </table>' . $uuidHtml . $adjuntosHtml;
     }
 
-    // ─── CFDI Builder (Facturapi format) ─────────────────────────────────────
+    // ─── CFDI Builder (formato normalizado PAC-agnóstico) ────────────────────
 
-    private function buildPayload(Venta $venta, array $config, array $receptor): array
+    private function buildNormalizedInvoice(Venta $venta, array $config, array $receptor): array
     {
-        $facturacion = $config['facturacion'] ?? [];
-        $tasaIva     = ($config['pos']['impuesto'] ?? 16) / 100;
-
-        $items = $venta->items->map(function ($item) use ($tasaIva) {
-            $precioConIva = round((float) $item->precio_unitario, 6);
-
-            return [
-                'product' => [
-                    'description'  => mb_strtoupper($item->nombre_producto),
-                    'product_key'  => $item->producto?->clave_sat        ?? '01010101',
-                    'unit_key'     => $item->producto?->clave_unidad_sat ?? 'H87',
-                    'unit_name'    => 'Pieza',
-                    'price'        => $precioConIva,
-                    'tax_included' => true,
-                    'taxes'        => [['type' => 'IVA', 'rate' => $tasaIva, 'factor' => 'Tasa']],
-                ],
-                'quantity' => (float) $item->cantidad,
-            ];
-        })->values()->toArray();
+        $facturacion    = $config['facturacion'] ?? [];
+        $empresaCfg     = $config['empresa'] ?? [];
+        $tasaIva        = ($config['pos']['impuesto'] ?? 16) / 100;
 
         $rfc       = strtoupper(trim($receptor['rfc'] ?? $venta->cliente?->rfc ?? ''));
         $esPublico = !$rfc || $rfc === 'XAXX010101000' || $rfc === 'XEXX010101000';
-        // Persona moral = RFC 12 chars, física = 13 chars
-        $esMoral   = !$esPublico && strlen($rfc) === 12;
-
+        $esMoral   = !$esPublico && strlen($rfc) === 12; // moral=12, física=13
         $defaultRegimen = $esMoral ? '601' : '616';
-        $defaultUso     = 'S01'; // Sin efectos fiscales — válido para ambos tipos
 
-        $customer = $esPublico ? [
-            'legal_name' => 'PUBLICO EN GENERAL',
-            'tax_id'     => 'XAXX010101000',
-            'tax_system' => '616',
-            'address'    => ['zip' => $facturacion['codigo_postal'] ?? '00000'],
-        ] : [
-            'legal_name' => strtoupper(trim($receptor['nombre'] ?? $venta->cliente?->nombre ?? '')),
-            'tax_id'     => $rfc,
-            'tax_system' => $receptor['regimen_fiscal'] ?? $venta->cliente?->regimen_fiscal ?? $defaultRegimen,
-            'address'    => ['zip' => $receptor['codigo_postal'] ?? $venta->cliente?->codigo_postal ?? '00000'],
-        ];
+        $items = $venta->items->map(function ($item) use ($tasaIva) {
+            return [
+                'descripcion'    => mb_strtoupper($item->nombre_producto),
+                'clave_sat'      => $item->producto?->clave_sat        ?? '01010101',
+                'clave_unidad'   => $item->producto?->clave_unidad_sat ?? 'H87',
+                'unidad'         => 'Pieza',
+                'precio_con_iva' => round((float) $item->precio_unitario, 6),
+                'cantidad'       => (float) $item->cantidad,
+                'codigo'         => $item->producto?->codigo_barras ?? '',
+            ];
+        })->values()->toArray();
 
         $folio = (int) ($facturacion['folio_actual'] ?? 1);
         $this->saveFacturacion(['folio_actual' => $folio + 1]);
 
         return [
-            'type'         => 'I',
-            'customer'     => $customer,
-            'items'        => $items,
-            'payment_form' => $this->mapFormaPago($venta->tipo_pago),
-            'payment_method' => 'PUE',
-            'use'          => $esPublico ? 'S01' : ($receptor['uso_cfdi'] ?? $venta->cliente?->uso_cfdi ?? $defaultUso),
-            'series'       => $facturacion['serie'] ?? 'A',
-            'folio_number' => $folio,
+            'tipo'        => 'I',
+            'serie'       => $facturacion['serie'] ?? 'A',
+            'folio'       => $folio,
+            'forma_pago'  => $this->mapFormaPago($venta->tipo_pago),
+            'metodo_pago' => 'PUE',
+            'tasa_iva'    => $tasaIva,
+            'emisor'      => [
+                'rfc'            => strtoupper(trim($empresaCfg['rfc'] ?? '')),
+                'nombre'         => $empresaCfg['nombre'] ?? 'Mi Empresa',
+                // nombre_sat: nombre exacto del SAT del CSD (Facturama exige que coincida)
+                'nombre_sat'     => $facturacion['nombre_sat'] ?? null,
+                'regimen_fiscal' => $facturacion['regimen_fiscal'] ?? '601',
+                'codigo_postal'  => $facturacion['codigo_postal'] ?? '',
+            ],
+            'receptor'    => $esPublico ? [
+                'rfc'            => 'XAXX010101000',
+                'nombre'         => 'PUBLICO EN GENERAL',
+                'regimen_fiscal' => '616',
+                'codigo_postal'  => $facturacion['codigo_postal'] ?? '00000',
+                'uso_cfdi'       => 'S01',
+                'es_publico'     => true,
+            ] : [
+                'rfc'            => $rfc,
+                'nombre'         => strtoupper(trim($receptor['nombre'] ?? $venta->cliente?->nombre ?? '')),
+                'regimen_fiscal' => $receptor['regimen_fiscal'] ?? $venta->cliente?->regimen_fiscal ?? $defaultRegimen,
+                'codigo_postal'  => $receptor['codigo_postal']  ?? $venta->cliente?->codigo_postal  ?? '00000',
+                'uso_cfdi'       => $receptor['uso_cfdi']       ?? $venta->cliente?->uso_cfdi       ?? 'S01',
+                'es_publico'     => false,
+            ],
+            'items'       => $items,
         ];
     }
 
     public function cancelarCfdi(Request $request, Venta $venta)
     {
-        if (!$venta->cfdi_uuid || !$venta->cfdi_facturapi_id) {
+        if (!$venta->cfdi_uuid || !$venta->cfdi_pac_id) {
             return response()->json(['message' => 'Esta venta no tiene CFDI generado'], 422);
         }
 
@@ -610,13 +751,13 @@ class FacturacionController extends Controller
             return response()->json(['message' => 'El CFDI ya está cancelado'], 422);
         }
 
-        $orgKey = $this->orgKey();
-        if (!$orgKey) {
-            return response()->json(['message' => 'Facturación no configurada'], 422);
-        }
+        $pac    = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?? 'facturama');
+        $ctx    = array_merge($this->emisorCtx(), ['cfdi_xml' => $venta->cfdi_xml]);
+        $motivo = $request->input('motivo', '02');
+        $uuidRel= $request->input('uuid_relacionado');
 
         try {
-            $this->facturapi()->cancelarFactura($orgKey, $venta->cfdi_facturapi_id, $request->input('motive', '02'));
+            $pac->cancelarFactura($ctx, $venta->cfdi_pac_id, $motivo, $uuidRel);
 
             $venta->update(['cfdi_status' => 'cancelado']);
 
@@ -638,11 +779,11 @@ class FacturacionController extends Controller
         }
 
         $telefono = null;
-        if (!empty($data['cliente_id'])) {
+        if (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+        } elseif (!empty($data['cliente_id'])) {
             $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
             $telefono = $cliente?->telefono;
-        } elseif (!empty($data['telefono'])) {
-            $telefono = $data['telefono'];
         }
 
         if (!$telefono) {
@@ -654,36 +795,105 @@ class FacturacionController extends Controller
         $publicCfg   = $svc->resolvePublicConfig((int) $venta->empresa_id, $sucursalId);
         $technicalCfg = $svc->resolveTechnicalConfig((int) $venta->empresa_id, $sucursalId);
 
-        if (!$technicalCfg || !$technicalCfg->access_token || !$technicalCfg->phone_number_id) {
+        if (!$svc->isConnected($technicalCfg)) {
             return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
         }
 
-        $businessName = $technicalCfg->display_name
-            ?: $technicalCfg->business_name
-            ?: ($publicCfg['business_name'] ?? 'Tu negocio');
+        // Emisor: nombre fiscal de empresa + RFC desde config facturación
+        $cfg          = $this->getConfig();
+        $emisorNombre = $cfg['empresa']['nombre'] ?? ($technicalCfg->business_name ?? 'Tu negocio');
+        $emisorRfc    = $cfg['empresa']['rfc'] ?? '';
 
-        $receptor = $venta->cfdi_receptor;
-        $receptorNombre = $receptor['nombre'] ?? 'Público en General';
-        $receptorRfc    = $receptor['rfc'] ?? 'XAXX010101000';
+        $baseUrl = rtrim(config('app.url'), '/');
+        $zipUrl  = "{$baseUrl}/api/cfdi/{$venta->cfdi_uuid}/zip";
 
         $body = implode("\n", [
-            "🧾 *Factura electrónica — {$businessName}*",
+            "🧾 *Factura electrónica*",
+            "🏢 *Emisor:* {$emisorNombre}" . ($emisorRfc ? " ({$emisorRfc})" : ''),
             '',
-            "🔖 *Folio venta:* {$venta->folio}",
+            "🔖 *Folio:* {$venta->folio}",
             "📋 *UUID:* {$venta->cfdi_uuid}",
-            "👤 *Receptor:* {$receptorNombre} ({$receptorRfc})",
             '💰 *Total:* $' . number_format((float) $venta->total, 2),
             '',
             '_Tu CFDI ha sido timbrado correctamente ante el SAT._',
         ]);
 
         try {
-            $svc->sendTextMessage($technicalCfg, $telefono, $body);
+            $svc->sendTicketMessage($technicalCfg, $telefono, $body, $zipUrl, '⬇️ Descargar factura');
         } catch (\Throwable $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
         return response()->json(['message' => 'Factura enviada por WhatsApp correctamente.']);
+    }
+
+    public function downloadZipPublico(string $uuid)
+    {
+        $venta = \App\Models\Venta::withoutGlobalScopes()
+            ->with('empresa')
+            ->where('cfdi_uuid', $uuid)
+            ->firstOrFail();
+
+        $pac = \App\Services\Pac\PacManager::for($venta->empresa);
+        $ctx = ['cfdi_xml' => $venta->cfdi_xml, 'empresa' => $venta->empresa];
+
+        $pdf = $pac->descargarPdf($ctx, $venta->cfdi_pac_id);
+
+        $xml = $venta->cfdi_xml
+            ?? $pac->descargarXml($ctx, $venta->cfdi_pac_id);
+
+        $tmpFile = tempnam(sys_get_temp_dir(), 'cfdi_') . '.zip';
+
+        $zip = new \ZipArchive();
+        $zip->open($tmpFile, \ZipArchive::CREATE | \ZipArchive::OVERWRITE);
+        $zip->addFromString($uuid . '.pdf', $pdf);
+        $zip->addFromString($uuid . '.xml', $xml);
+        $zip->close();
+
+        return response()->download($tmpFile, $uuid . '.zip', [
+            'Content-Type' => 'application/zip',
+        ])->deleteFileAfterSend(true);
+    }
+
+    public function downloadPdfPublico(string $uuid)
+    {
+        $venta = \App\Models\Venta::withoutGlobalScopes()
+            ->with('empresa')
+            ->where('cfdi_uuid', $uuid)
+            ->firstOrFail();
+
+        $pac = \App\Services\Pac\PacManager::for($venta->empresa);
+        $ctx = ['cfdi_xml' => $venta->cfdi_xml, 'empresa' => $venta->empresa];
+        $pdf = $pac->descargarPdf($ctx, $venta->cfdi_pac_id);
+
+        return response($pdf, 200, [
+            'Content-Type'        => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="' . $venta->cfdi_uuid . '.pdf"',
+        ]);
+    }
+
+    public function downloadXmlPublico(string $uuid)
+    {
+        $venta = \App\Models\Venta::withoutGlobalScopes()
+            ->with('empresa')
+            ->where('cfdi_uuid', $uuid)
+            ->firstOrFail();
+
+        if ($venta->cfdi_xml) {
+            return response($venta->cfdi_xml, 200, [
+                'Content-Type'        => 'application/xml',
+                'Content-Disposition' => 'attachment; filename="' . $venta->cfdi_uuid . '.xml"',
+            ]);
+        }
+
+        $pac = \App\Services\Pac\PacManager::for($venta->empresa);
+        $ctx = ['empresa' => $venta->empresa];
+        $xml = $pac->descargarXml($ctx, $venta->cfdi_pac_id);
+
+        return response($xml, 200, [
+            'Content-Type'        => 'application/xml',
+            'Content-Disposition' => 'attachment; filename="' . $venta->cfdi_uuid . '.xml"',
+        ]);
     }
 
     private function mapFormaPago(string $tipo): string

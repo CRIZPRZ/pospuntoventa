@@ -34,7 +34,7 @@ class PlanController extends Controller
             'color'              => 'nullable|string|max:20',
             'stripe_price_id'      => 'nullable|string|max:100',
             'stripe_price_id_anual'=> 'nullable|string|max:100',
-            'tipo'                 => 'nullable|in:gratis,stripe,manual',
+            'tipo'                 => 'nullable|in:stripe,manual',
             'activo'               => 'boolean',
         ]);
 
@@ -57,7 +57,7 @@ class PlanController extends Controller
             'color'              => 'nullable|string|max:20',
             'stripe_price_id'      => 'nullable|string|max:100',
             'stripe_price_id_anual'=> 'nullable|string|max:100',
-            'tipo'                 => 'nullable|in:gratis,stripe,manual',
+            'tipo'                 => 'nullable|in:stripe,manual',
             'activo'               => 'boolean',
         ]);
 
@@ -68,8 +68,18 @@ class PlanController extends Controller
 
     public function destroy(Plan $plan)
     {
-        // Desasociar empresas antes de eliminar
-        $plan->empresas()->update(['plan_id' => null, 'plan_estado' => 'sin_plan']);
+        // Desasociar empresas antes de eliminar y dejarlas vencidas hasta reasignar plan.
+        $plan->empresas()->update([
+            'plan_id'             => null,
+            'plan_estado'         => 'sin_plan',
+            'plan_vigente_hasta'  => now(),
+            'plan_precio_pactado' => null,
+        ]);
+
+        foreach ($plan->empresas as $empresa) {
+            $empresa->modulos()->update(['activo' => false]);
+        }
+
         $plan->delete();
 
         return response()->json(['message' => 'Plan eliminado']);

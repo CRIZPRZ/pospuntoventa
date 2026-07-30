@@ -8,7 +8,7 @@ class SuscripcionFactura extends Model
 {
     protected $fillable = [
         'empresa_id', 'stripe_invoice_id',
-        'cfdi_uuid', 'cfdi_facturapi_id', 'cfdi_xml', 'cfdi_status',
+        'cfdi_uuid', 'cfdi_facturapi_id', 'cfdi_pac_id', 'cfdi_pac', 'cfdi_xml', 'cfdi_status',
         'receptor', 'monto', 'moneda', 'concepto',
     ];
 

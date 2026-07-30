@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Configuracion;
 use App\Models\ConfiguracionSucursal;
+use App\Models\Empresa;
 use App\Models\WhatsAppConfig;
 use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
@@ -95,15 +96,16 @@ class ConfiguracionController extends Controller
 
         if (array_key_exists('whatsapp', $data)) {
             $scope = $data['whatsapp_scope'] ?? 'empresa';
+            $whatsapp = $this->storedWhatsAppPayload($data['whatsapp'] ?? []);
             if ($scope === 'sucursal' && $this->sucursalId()) {
-                $merged = array_replace_recursive($this->sucursalConfig(), ['whatsapp' => $data['whatsapp'] ?? []]);
+                $merged = array_replace_recursive($this->sucursalConfig(), ['whatsapp' => $whatsapp]);
                 ConfiguracionSucursal::updateOrCreate(
                     ['sucursal_id' => $this->sucursalId()],
                     ['empresa_id' => $this->empresaId(), 'config' => $merged]
                 );
                 Cache::forever($this->sucursalCacheKey(), $merged);
             } else {
-                $merged = array_replace_recursive($this->empresaConfig(), ['whatsapp' => $data['whatsapp'] ?? []]);
+                $merged = array_replace_recursive($this->empresaConfig(), ['whatsapp' => $whatsapp]);
                 Configuracion::updateOrCreate(
                     ['empresa_id' => $this->empresaId()],
                     ['config' => $merged]
@@ -231,8 +233,8 @@ class ConfiguracionController extends Controller
         $empresaConfig = $this->empresaConfig();
         $sucursalConfig = $this->sucursalConfig();
 
-        $empresaPublic = array_merge($this->defaultWhatsApp(), $empresaConfig['whatsapp'] ?? []);
-        $sucursalPublic = $sucursalConfig['whatsapp'] ?? null;
+        $empresaPublic = array_merge($this->defaultWhatsApp(), $this->storedWhatsAppPayload($empresaConfig['whatsapp'] ?? []));
+        $sucursalPublic = $this->storedWhatsAppPayload($sucursalConfig['whatsapp'] ?? []);
         $hasSucursalOverride = is_array($sucursalPublic) && !empty($sucursalPublic);
 
         $resolved = $hasSucursalOverride
@@ -240,7 +242,11 @@ class ConfiguracionController extends Controller
             : $empresaPublic;
 
         $effectiveRow = $this->effectiveWhatsAppTechnicalConfig($hasSucursalOverride);
-        if ($effectiveRow) {
+        $selectedProvider = $this->whatsAppProvider();
+        $resolved['provider'] = $selectedProvider;
+        $rowProvider = $this->normalizeWhatsAppProvider($effectiveRow?->provider);
+
+        if ($effectiveRow && $rowProvider === $selectedProvider) {
             $resolved['status'] = $effectiveRow->status ?: ($resolved['status'] ?? 'disconnected');
             $resolved['business_name'] = $resolved['business_name'] ?: ($effectiveRow->business_name ?? '');
             $resolved['phone_number'] = $resolved['phone_number'] ?: ($effectiveRow->phone_number ?? '');
@@ -248,6 +254,12 @@ class ConfiguracionController extends Controller
             $resolved['connected_phone_number'] = $effectiveRow->connected_phone_number ?? ($resolved['connected_phone_number'] ?? '');
             $resolved['last_test_at'] = $effectiveRow->last_test_at?->format('Y-m-d H:i:s') ?? ($resolved['last_test_at'] ?? '');
             $resolved['last_error'] = $effectiveRow->last_error ?? ($resolved['last_error'] ?? '');
+        } elseif ($effectiveRow && $rowProvider !== $selectedProvider) {
+            $resolved['status'] = 'disconnected';
+            $resolved['display_name'] = '';
+            $resolved['connected_phone_number'] = '';
+            $resolved['last_test_at'] = '';
+            $resolved['last_error'] = '';
         }
 
         $resolved['scope_mode'] = $hasSucursalOverride ? 'sucursal' : 'empresa';
@@ -257,6 +269,13 @@ class ConfiguracionController extends Controller
         $config['whatsapp'] = $resolved;
 
         return $config;
+    }
+
+    private function storedWhatsAppPayload(array $whatsapp): array
+    {
+        unset($whatsapp['empresa_default'], $whatsapp['inherits_from_empresa'], $whatsapp['scope_mode']);
+
+        return $whatsapp;
     }
 
     private function effectiveWhatsAppTechnicalConfig(bool $hasSucursalOverride): ?WhatsAppConfig
@@ -396,6 +415,7 @@ class ConfiguracionController extends Controller
     private function defaultWhatsApp(): array
     {
         return [
+            'provider' => $this->whatsAppProvider(),
             'status' => 'disconnected',
             'phone_number' => '',
             'business_name' => '',
@@ -410,5 +430,19 @@ class ConfiguracionController extends Controller
             'auto_send_invoice' => false,
             'auto_send_payment_reminder' => false,
         ];
+    }
+
+    private function whatsAppProvider(): string
+    {
+        $provider = Empresa::withoutGlobalScopes()
+            ->where('id', $this->empresaId())
+            ->value('whatsapp_provider') ?: 'cloud_api';
+
+        return $this->normalizeWhatsAppProvider($provider);
+    }
+
+    private function normalizeWhatsAppProvider(?string $provider): string
+    {
+        return $provider === 'baileys' ? 'baileys' : ($provider === 'disabled' ? 'disabled' : 'cloud_api');
     }
 }

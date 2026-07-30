@@ -136,7 +136,7 @@ class TicketPublicoController extends Controller
             $documentos = $config[4];
 
             $technicalConfig = $svc->resolveTechnicalConfig((int) $cotizacion->empresa_id);
-            if (!$technicalConfig?->access_token || !$technicalConfig?->phone_number_id) return;
+            if (!$svc->isConnected($technicalConfig)) return;
 
             // Send to empresa's configured phone number
             $publicConfig = $svc->resolvePublicConfig((int) $cotizacion->empresa_id);

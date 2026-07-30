@@ -115,7 +115,7 @@ class ClienteController extends Controller
         $publicCfg    = $svc->resolvePublicConfig($empresaId, $sucursalId);
         $technicalCfg = $svc->resolveTechnicalConfig($empresaId, $sucursalId);
 
-        if (!$technicalCfg || !$technicalCfg->access_token || !$technicalCfg->phone_number_id) {
+        if (!$svc->isConnected($technicalCfg)) {
             return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
         }
 

@@ -38,6 +38,20 @@ class UsuarioController extends Controller
     public function store(Request $request)
     {
         $tenantId = app('tenant_id');
+        $empresa = $request->user()?->empresa?->loadMissing('plan');
+
+        if (! $empresa || $empresa->id !== $tenantId) {
+            return response()->json(['message' => 'Empresa no encontrada'], 422);
+        }
+
+        $limiteUsuarios = $empresa->limiteUsuarios();
+        $usuariosActuales = $empresa->usuarios()->count();
+
+        if ($limiteUsuarios !== -1 && $usuariosActuales >= $limiteUsuarios) {
+            return response()->json([
+                'message' => "Tu plan permite hasta {$limiteUsuarios} usuario(s). Actualiza tu plan para agregar otro.",
+            ], 422);
+        }
 
         // Only show roles belonging to this tenant
         $roles = Role::where('empresa_id', $tenantId)->pluck('name')->toArray();

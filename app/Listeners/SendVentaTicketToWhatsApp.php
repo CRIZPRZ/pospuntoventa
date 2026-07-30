@@ -5,11 +5,15 @@ namespace App\Listeners;
 use App\Events\VentaCompletada;
 use App\Models\Venta;
 use App\Services\WhatsAppService;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
-class SendVentaTicketToWhatsApp
+class SendVentaTicketToWhatsApp implements ShouldQueue
 {
+    use InteractsWithQueue;
+
     public function __construct(
         protected WhatsAppService $whatsAppService,
     ) {}
@@ -45,13 +49,16 @@ class SendVentaTicketToWhatsApp
             $venta->sucursal_id ? (int) $venta->sucursal_id : null,
         );
 
-        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
+        if (!$this->whatsAppService->isConnected($technicalConfig)) {
             return;
         }
 
-        $businessName = $technicalConfig->display_name
-            ?: $technicalConfig->business_name
-            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+        $businessName = $this->whatsAppService->resolveBusinessName(
+            (int) $venta->empresa_id,
+            $venta->sucursal_id ? (int) $venta->sucursal_id : null,
+            $technicalConfig,
+            $publicConfig,
+        );
 
         [$body, $ticketUrl] = self::buildTicketContent($venta, $businessName);
 

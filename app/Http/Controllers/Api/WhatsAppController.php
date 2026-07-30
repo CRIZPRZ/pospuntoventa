@@ -5,7 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Configuracion;
 use App\Models\ConfiguracionSucursal;
+use App\Models\Empresa;
 use App\Models\WhatsAppConfig;
+use App\Services\BaileysWhatsAppService;
 use App\Services\WhatsAppService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,7 +16,8 @@ use Illuminate\Support\Facades\Cache;
 class WhatsAppController extends Controller
 {
     public function __construct(
-        private readonly WhatsAppService $service
+        private readonly WhatsAppService $service,
+        private readonly BaileysWhatsAppService $baileys
     ) {
     }
 
@@ -22,7 +25,7 @@ class WhatsAppController extends Controller
     {
         $data = $request->validate([
             'scope' => ['nullable', 'string', 'in:empresa,sucursal'],
-            'phone_number' => ['required', 'string', 'max:40'],
+            'phone_number' => ['nullable', 'string', 'max:40'],
             'business_name' => ['nullable', 'string', 'max:150'],
             'display_name' => ['nullable', 'string', 'max:150'],
             'connected_phone_number' => ['nullable', 'string', 'max:40'],
@@ -38,23 +41,38 @@ class WhatsAppController extends Controller
         ]);
 
         $scope = $this->scope($data);
+        $provider = $this->provider();
 
-        $this->savePublicConfig($this->publicPayload($data), $scope);
+        if ($provider === 'disabled') {
+            return response()->json(['message' => 'WhatsApp está desactivado para esta empresa.'], 422);
+        }
+
+        if ($provider === 'baileys') {
+            return $this->connectBaileys($data, $scope);
+        }
+
+        $hasTechnicalConnection = !empty($data['access_token']) && !empty($data['phone_number_id']);
+
+        // Siempre incluir status en el config público cuando hay conexión técnica
+        $publicPatch = $this->publicPayload($data);
+        if ($hasTechnicalConnection) {
+            $publicPatch['status'] = 'connected';
+            $publicPatch['last_error'] = '';
+        }
+        $this->savePublicConfig($publicPatch, $scope);
 
         $technicalPayload = [
             'empresa_id' => $this->empresaId(),
             'sucursal_id' => $scope === 'sucursal' ? $this->sucursalId() : null,
-            'provider' => 'meta',
+            'provider' => 'cloud_api',
             'business_name' => $data['business_name'] ?? null,
-            'phone_number' => $data['phone_number'],
+            'phone_number' => $data['phone_number'] ?? null,
         ];
-
-        $hasTechnicalConnection = !empty($data['access_token']) && !empty($data['phone_number_id']);
 
         if ($hasTechnicalConnection) {
             $technicalPayload = array_merge($technicalPayload, [
                 'display_name' => $data['display_name'] ?? ($data['business_name'] ?? null),
-                'connected_phone_number' => $data['connected_phone_number'] ?? $data['phone_number'],
+                'connected_phone_number' => $data['connected_phone_number'] ?? $data['phone_number'] ?? null,
                 'phone_number_id' => $data['phone_number_id'],
                 'whatsapp_business_account_id' => $data['whatsapp_business_account_id'] ?? null,
                 'access_token' => $data['access_token'],
@@ -87,6 +105,101 @@ class WhatsAppController extends Controller
         ]);
     }
 
+    public function qr(Request $request): JsonResponse
+    {
+        $scope = $this->scope($request->validate([
+            'scope' => ['nullable', 'string', 'in:empresa,sucursal'],
+        ]));
+
+        if ($this->provider() !== 'baileys') {
+            return response()->json(['message' => 'La empresa no tiene Baileys como proveedor activo.'], 422);
+        }
+
+        $config = $this->technicalConfig($scope, false);
+        if (!$config || $config->provider !== 'baileys') {
+            return $this->connectBaileys($this->publicConfigForScope($scope), $scope);
+        }
+
+        try {
+            $payload = $this->baileys->getQr($config);
+        } catch (\Throwable $e) {
+            $config->update(['status' => 'error', 'last_error' => $e->getMessage()]);
+            $this->savePublicConfig(['status' => 'error', 'last_error' => $e->getMessage(), 'provider' => 'baileys'], $scope);
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $hasQrImage = !empty($payload['image'] ?? null) || !empty($payload['qr_image'] ?? null);
+        $status = $payload['status'] ?? ($hasQrImage ? 'qr_pending' : ($config->status ?: 'disconnected'));
+        $config->update([
+            'status' => $status,
+            'last_error' => $payload['last_error'] ?? null,
+            'connected_phone_number' => $status === 'connected' ? ($payload['phone_number'] ?? $config->connected_phone_number) : $config->connected_phone_number,
+            'display_name' => $status === 'connected' ? ($payload['display_name'] ?? $config->display_name) : $config->display_name,
+            'connected_at' => $status === 'connected' ? ($config->connected_at ?: now()) : $config->connected_at,
+            'disconnected_at' => $status === 'connected' ? null : $config->disconnected_at,
+        ]);
+        $this->savePublicConfig([
+            'status' => $status,
+            'provider' => 'baileys',
+            'display_name' => $status === 'connected' ? ($payload['display_name'] ?? ($config->display_name ?? '')) : ($config->display_name ?? ''),
+            'connected_phone_number' => $status === 'connected' ? ($payload['phone_number'] ?? ($config->connected_phone_number ?? '')) : ($config->connected_phone_number ?? ''),
+            'last_error' => $payload['last_error'] ?? '',
+        ], $scope);
+
+        return response()->json([
+            'message' => 'QR obtenido correctamente.',
+            'qr' => $payload,
+        ]);
+    }
+
+    public function status(Request $request): JsonResponse
+    {
+        $scope = $this->scope($request->validate([
+            'scope' => ['nullable', 'string', 'in:empresa,sucursal'],
+        ]));
+
+        $config = $this->technicalConfig($scope, true);
+        if (!$config) {
+            return response()->json(['status' => 'disconnected']);
+        }
+
+        if ($config->provider !== 'baileys') {
+            return response()->json(['status' => $this->service->isConnected($config) ? 'connected' : ($config->status ?: 'disconnected')]);
+        }
+
+        try {
+            $payload = $this->baileys->getStatus($config);
+            $status = $payload['status'] ?? ($payload['connected'] ?? false ? 'connected' : ($config->status ?: 'disconnected'));
+            $patch = [
+                'status' => $status,
+                'last_error' => $payload['last_error'] ?? null,
+            ];
+            if ($status === 'connected') {
+                $patch['connected_at'] = $config->connected_at ?: now();
+                $patch['disconnected_at'] = null;
+                $patch['connected_phone_number'] = $payload['phone_number'] ?? $config->connected_phone_number;
+                $patch['display_name'] = $payload['display_name'] ?? $config->display_name;
+            }
+            if ($status === 'disconnected') {
+                $patch['disconnected_at'] = now();
+            }
+            $config->update($patch);
+            $this->savePublicConfig([
+                'status' => $status,
+                'provider' => 'baileys',
+                'display_name' => $payload['display_name'] ?? ($config->display_name ?? ''),
+                'connected_phone_number' => $payload['phone_number'] ?? ($config->connected_phone_number ?? ''),
+                'last_error' => $payload['last_error'] ?? '',
+            ], $scope);
+
+            return response()->json(['status' => $status, 'data' => $payload]);
+        } catch (\Throwable $e) {
+            $config->update(['status' => 'error', 'last_error' => $e->getMessage()]);
+            $this->savePublicConfig(['status' => 'error', 'last_error' => $e->getMessage(), 'provider' => 'baileys'], $scope);
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+    }
+
     public function test(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -102,14 +215,18 @@ class WhatsAppController extends Controller
             ], 422);
         }
 
-        if (!$config->access_token || !$config->phone_number_id) {
+        if (!$this->service->isConnected($config)) {
             $config->update([
                 'status' => 'pending',
-                'last_error' => 'La conexión técnica con Meta aún no está completa.',
+                'last_error' => $config->provider === 'baileys'
+                    ? 'La sesión de WhatsApp Web aún no está conectada.'
+                    : 'La conexión técnica con Meta aún no está completa.',
             ]);
 
             return response()->json([
-                'message' => 'La conexión técnica con Meta todavía no está lista. Completa el onboarding o registra las credenciales del número.',
+                'message' => $config->provider === 'baileys'
+                    ? 'La sesión de WhatsApp Web todavía no está lista. Escanea el QR y vuelve a intentar.'
+                    : 'La conexión técnica con Meta todavía no está lista. Completa el onboarding o registra las credenciales del número.',
             ], 422);
         }
 
@@ -195,7 +312,7 @@ class WhatsAppController extends Controller
             [
                 'empresa_id' => $this->empresaId(),
                 'sucursal_id' => $scope === 'sucursal' ? $this->sucursalId() : null,
-                'provider' => 'meta',
+                'provider' => 'cloud_api',
                 'business_name' => $data['business_name'] ?? null,
                 'phone_number' => $data['phone_number'] ?? ($data['connected_phone_number'] ?? null),
                 'display_name' => $data['display_name'] ?? ($data['business_name'] ?? null),
@@ -232,6 +349,14 @@ class WhatsAppController extends Controller
         $config = $this->technicalConfig($scope, false);
 
         if ($config) {
+            if ($config->provider === 'baileys') {
+                try {
+                    $this->baileys->logout($config);
+                } catch (\Throwable) {
+                    // El logout local no debe impedir limpiar la conexión en EventPOS.
+                }
+            }
+
             if ($scope === 'sucursal') {
                 $config->delete();
             } else {
@@ -242,6 +367,7 @@ class WhatsAppController extends Controller
                     'whatsapp_business_account_id' => null,
                     'access_token' => null,
                     'status' => 'disconnected',
+                    'disconnected_at' => now(),
                     'last_test_at' => null,
                     'last_error' => null,
                 ]);
@@ -309,9 +435,11 @@ class WhatsAppController extends Controller
 
     private function savePublicConfig(array $patch, string $scope): void
     {
+        $patch = $this->storedPublicConfig($patch);
+
         if ($scope === 'sucursal' && $this->sucursalId()) {
             $config = $this->branchBaseConfig();
-            $config['whatsapp'] = array_merge($config['whatsapp'] ?? [], $patch);
+            $config['whatsapp'] = array_merge($this->storedPublicConfig($config['whatsapp'] ?? []), $patch);
 
             ConfiguracionSucursal::updateOrCreate(
                 ['sucursal_id' => $this->sucursalId()],
@@ -323,7 +451,7 @@ class WhatsAppController extends Controller
         }
 
         $config = $this->baseConfig();
-        $config['whatsapp'] = array_merge($config['whatsapp'] ?? $this->defaultPublicConfig(), $patch);
+        $config['whatsapp'] = array_merge($this->storedPublicConfig($config['whatsapp'] ?? $this->defaultPublicConfig()), $patch);
 
         Configuracion::updateOrCreate(
             ['empresa_id' => $this->empresaId()],
@@ -336,6 +464,7 @@ class WhatsAppController extends Controller
     private function defaultPublicConfig(): array
     {
         return [
+            'provider' => $this->provider(),
             'status' => 'disconnected',
             'phone_number' => '',
             'business_name' => '',
@@ -356,6 +485,7 @@ class WhatsAppController extends Controller
     {
         return array_intersect_key($data, array_flip([
             'status',
+            'provider',
             'phone_number',
             'business_name',
             'display_name',
@@ -384,6 +514,75 @@ class WhatsAppController extends Controller
     private function sucursalId(): ?int
     {
         return app()->bound('sucursal_id') ? (int) app('sucursal_id') : null;
+    }
+
+    private function provider(): string
+    {
+        $provider = Empresa::withoutGlobalScopes()
+            ->where('id', $this->empresaId())
+            ->value('whatsapp_provider') ?: 'cloud_api';
+
+        return $provider === 'baileys' ? 'baileys' : ($provider === 'disabled' ? 'disabled' : 'cloud_api');
+    }
+
+    private function connectBaileys(array $data, string $scope): JsonResponse
+    {
+        $sessionKey = 'empresa-' . $this->empresaId() . ($scope === 'sucursal' && $this->sucursalId() ? '-sucursal-' . $this->sucursalId() : '');
+
+        $config = WhatsAppConfig::updateOrCreate(
+            ['empresa_id' => $this->empresaId(), 'sucursal_id' => $scope === 'sucursal' ? $this->sucursalId() : null],
+            [
+                'empresa_id' => $this->empresaId(),
+                'sucursal_id' => $scope === 'sucursal' ? $this->sucursalId() : null,
+                'provider' => 'baileys',
+                'session_key' => $sessionKey,
+                'business_name' => $data['business_name'] ?? null,
+                'phone_number' => $data['phone_number'] ?? null,
+                'display_name' => $data['display_name'] ?? ($data['business_name'] ?? null),
+                'connected_phone_number' => $data['connected_phone_number'] ?? null,
+                'status' => 'qr_pending',
+                'last_error' => null,
+            ]
+        );
+
+        $this->savePublicConfig(array_merge($this->publicPayload($data), [
+            'provider' => 'baileys',
+            'status' => 'qr_pending',
+            'last_error' => '',
+        ]), $scope);
+
+        try {
+            $payload = $this->baileys->startSession($config);
+        } catch (\Throwable $e) {
+            $config->update(['status' => 'error', 'last_error' => $e->getMessage()]);
+            $this->savePublicConfig(['provider' => 'baileys', 'status' => 'error', 'last_error' => $e->getMessage()], $scope);
+
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'QR generado. Escanea WhatsApp Web para terminar la conexión.',
+            'status' => 'qr_pending',
+            'scope' => $scope,
+            'qr' => $payload['qr'] ?? $payload,
+        ]);
+    }
+
+    private function publicConfigForScope(string $scope): array
+    {
+        $empresaWhatsapp = $this->storedPublicConfig($this->baseConfig()['whatsapp'] ?? []);
+        if ($scope !== 'sucursal' || !$this->sucursalId()) {
+            return $empresaWhatsapp;
+        }
+
+        return array_replace_recursive($empresaWhatsapp, $this->storedPublicConfig($this->branchBaseConfig()['whatsapp'] ?? []));
+    }
+
+    private function storedPublicConfig(array $whatsapp): array
+    {
+        unset($whatsapp['empresa_default'], $whatsapp['inherits_from_empresa'], $whatsapp['scope_mode']);
+
+        return $whatsapp;
     }
 
     private function branchCacheKey(): string

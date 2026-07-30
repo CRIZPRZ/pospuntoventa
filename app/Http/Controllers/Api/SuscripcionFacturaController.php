@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Mail\FacturaSuscripcionMail;
+use App\Models\RecargaCredito;
 use App\Models\SuperAdminConfig;
 use App\Models\SuscripcionFactura;
 use App\Services\FacturapiService;
@@ -16,6 +17,45 @@ use Stripe\Invoice;
 class SuscripcionFacturaController extends Controller
 {
     public function __construct(private FacturapiService $facturapi) {}
+
+    private function superAdminPac(): \App\Services\Pac\PacContract
+    {
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        return \App\Services\Pac\PacManager::make($provider);
+    }
+
+    private function superAdminCtx(): array
+    {
+        $ambiente = SuperAdminConfig::get('fiscal_ambiente', 'test');
+        return [
+            'rfc'            => strtoupper(trim(SuperAdminConfig::get('fiscal_rfc', ''))),
+            'nombre'         => SuperAdminConfig::get('fiscal_razon_social', ''),
+            'nombre_sat'     => SuperAdminConfig::get('fiscal_razon_social', ''),
+            'regimen_fiscal' => SuperAdminConfig::get('fiscal_regimen_fiscal', '601'),
+            'codigo_postal'  => SuperAdminConfig::get('fiscal_codigo_postal', ''),
+            'ambiente'       => $ambiente,
+            'org_id'         => SuperAdminConfig::get('fiscal_facturapi_org_id'),
+            'org_key'        => $ambiente === 'live'
+                ? SuperAdminConfig::get('fiscal_facturapi_live_key')
+                : SuperAdminConfig::get('fiscal_facturapi_test_key'),
+        ];
+    }
+
+    private function assertSuperAdminReady(): void
+    {
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $csdSubido = SuperAdminConfig::get('fiscal_csd_subido');
+        $rfc = SuperAdminConfig::get('fiscal_rfc');
+
+        if (!$rfc) abort(422, 'El sistema de facturación no está configurado aún. Contacta al soporte.');
+
+        if ($provider === 'facturapi') {
+            $ctx = $this->superAdminCtx();
+            if (!$ctx['org_key']) abort(422, 'El sistema de facturación no está configurado aún. Contacta al soporte.');
+        } else {
+            if (!$csdSubido) abort(422, 'El sistema de facturación no está configurado aún. Contacta al soporte.');
+        }
+    }
 
     private function getSuperAdminApiKey(): string
     {
@@ -247,53 +287,71 @@ class SuscripcionFacturaController extends Controller
     public function facturarManual(Request $request, \App\Models\Empresa $empresa)
     {
         $data = $request->validate([
-            'monto'               => 'required|numeric|min:0.01',
-            'concepto'            => 'required|string|max:255',
-            'receptor'            => 'required|array',
-            'receptor.rfc'        => 'required|string|max:20',
-            'receptor.nombre'     => 'required|string|max:255',
-            'receptor.codigo_postal' => 'required|string|max:10',
+            'monto'                   => 'required|numeric|min:0.01',
+            'concepto'                => 'required|string|max:255',
+            'receptor'                => 'required|array',
+            'receptor.rfc'            => 'required|string|max:20',
+            'receptor.nombre'         => 'required|string|max:255',
+            'receptor.codigo_postal'  => 'required|string|max:10',
             'receptor.regimen_fiscal' => 'required|string|max:10',
-            'receptor.uso_cfdi'   => 'required|string|max:10',
-            'receptor.email'      => 'required|email',
+            'receptor.uso_cfdi'       => 'required|string|max:10',
+            'receptor.email'          => 'required|email',
         ]);
 
-        $apiKey = $this->getSuperAdminApiKey();
+        $this->assertSuperAdminReady();
 
-        $payload = [
-            'type'     => 'ingreso',
-            'use'      => $data['receptor']['uso_cfdi'],
-            'customer' => [
-                'legal_name'   => $data['receptor']['nombre'],
-                'rfc'          => $data['receptor']['rfc'],
-                'tax_id'       => $data['receptor']['rfc'],
-                'fiscal_regime'=> $data['receptor']['regimen_fiscal'],
-                'zip'          => $data['receptor']['codigo_postal'],
-                'email'        => $data['receptor']['email'],
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $ctx      = $this->superAdminCtx();
+        $pac      = $this->superAdminPac();
+        $serie    = SuperAdminConfig::get('fiscal_serie', 'SS');
+        $folio    = (int) (SuperAdminConfig::get('fiscal_folio_actual', 0)) + 1;
+
+        $invoice = [
+            'tipo'        => 'I',
+            'serie'       => $serie,
+            'folio'       => $folio,
+            'tasa_iva'    => 0.16,
+            'metodo_pago' => 'PUE',
+            'forma_pago'  => '03',
+            'emisor'      => $ctx,
+            'receptor'    => [
+                'es_publico'     => false,
+                'rfc'            => $data['receptor']['rfc'],
+                'nombre'         => $data['receptor']['nombre'],
+                'codigo_postal'  => $data['receptor']['codigo_postal'],
+                'regimen_fiscal' => $data['receptor']['regimen_fiscal'],
+                'uso_cfdi'       => $data['receptor']['uso_cfdi'],
             ],
             'items' => [[
-                'quantity'    => 1,
-                'product'     => [
-                    'description'  => $data['concepto'],
-                    'product_key'  => '80141600',
-                    'unit_key'     => 'E48',
-                    'unit_name'    => 'Servicio',
-                    'price'        => (float) $data['monto'],
-                    'tax_included' => true,
-                    'taxes'        => [['type' => 'IVA', 'rate' => 0.16]],
-                ],
+                'descripcion'    => $data['concepto'],
+                'clave_sat'      => '80141600',
+                'clave_unidad'   => 'E48',
+                'unidad'         => 'Servicio',
+                'cantidad'       => 1,
+                'precio_con_iva' => (float) $data['monto'],
             ]],
-            'payment_form' => '03',
         ];
 
-        $invoice = $this->facturapi->crearFactura($apiKey, $payload);
+        try {
+            $result = $pac->crearFactura($ctx, $invoice);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        SuperAdminConfig::set('fiscal_folio_actual', $folio);
+
+        $xml    = $result['xml'] ?? null;
+        $uuid   = $result['uuid'] ?? null;
+        $pacId  = $result['pac_id'] ?? null;
 
         $factura = SuscripcionFactura::create([
             'empresa_id'        => $empresa->id,
             'stripe_invoice_id' => null,
-            'cfdi_uuid'         => $invoice['uuid'] ?? null,
-            'cfdi_facturapi_id' => $invoice['id']   ?? null,
-            'cfdi_xml'          => $invoice['cfdi_xml'] ?? null,
+            'cfdi_uuid'         => $uuid,
+            'cfdi_facturapi_id' => $provider === 'facturapi' ? $pacId : null,
+            'cfdi_pac_id'       => $pacId,
+            'cfdi_pac'          => $provider,
+            'cfdi_xml'          => $xml,
             'cfdi_status'       => 'timbrado',
             'receptor'          => $data['receptor'],
             'monto'             => (float) $data['monto'],
@@ -302,12 +360,11 @@ class SuscripcionFacturaController extends Controller
         ]);
 
         try {
-            $xmlContent = $factura->cfdi_xml ?? $this->facturapi->descargarXml($apiKey, $factura->cfdi_facturapi_id);
-            $pdfRaw     = $this->facturapi->descargarPdf($apiKey, $factura->cfdi_facturapi_id);
-            $pdfB64     = base64_encode($pdfRaw);
-
+            $ctxPdf  = array_merge($ctx, ['cfdi_xml' => $xml]);
+            $pdfRaw  = $pac->descargarPdf($ctxPdf, $pacId);
+            $pdfB64  = base64_encode($pdfRaw);
             Mail::to($data['receptor']['email'])
-                ->queue(new FacturaSuscripcionMail($factura, $xmlContent, $pdfB64));
+                ->queue(new FacturaSuscripcionMail($factura, $xml ?? '', $pdfB64));
         } catch (\Throwable $e) {
             Log::error("Error enviando mail factura manual empresa #{$empresa->id}: {$e->getMessage()}");
         }
@@ -316,5 +373,180 @@ class SuscripcionFacturaController extends Controller
             'message' => 'CFDI generado y enviado a ' . $data['receptor']['email'],
             'factura' => $factura,
         ]);
+    }
+
+    /** GET /api/superadmin/facturas — lista todas las facturas de suscripción */
+    public function indexSuperAdmin(Request $request)
+    {
+        $query = SuscripcionFactura::with('empresa:id,nombre')
+            ->orderByDesc('created_at');
+
+        if ($request->filled('cfdi_status')) {
+            $query->where('cfdi_status', $request->cfdi_status);
+        }
+        if ($request->filled('empresa_id')) {
+            $query->where('empresa_id', $request->empresa_id);
+        }
+
+        $facturas = $query->paginate(50);
+
+        return response()->json($facturas);
+    }
+
+    /** GET /api/superadmin/facturas/{factura}/xml */
+    public function downloadXmlSuperAdmin(SuscripcionFactura $factura)
+    {
+        $xml = $factura->cfdi_xml;
+        if (!$xml && $factura->cfdi_pac_id) {
+            $pac = \App\Services\Pac\PacManager::make($factura->cfdi_pac ?? 'sw_sapiens');
+            $xml = $pac->descargarXml($this->superAdminCtx(), $factura->cfdi_pac_id);
+        }
+        if (!$xml) abort(404, 'XML no disponible');
+        return response($xml, 200, [
+            'Content-Type'        => 'application/xml',
+            'Content-Disposition' => "attachment; filename=\"CFDI_{$factura->cfdi_uuid}.xml\"",
+        ]);
+    }
+
+    /** GET /api/superadmin/facturas/{factura}/pdf */
+    public function downloadPdfSuperAdmin(SuscripcionFactura $factura)
+    {
+        $pac = \App\Services\Pac\PacManager::make($factura->cfdi_pac ?? 'sw_sapiens');
+        $ctx = array_merge($this->superAdminCtx(), ['cfdi_xml' => $factura->cfdi_xml]);
+        $pdf = $pac->descargarPdf($ctx, $factura->cfdi_pac_id);
+        return response($pdf, 200, [
+            'Content-Type'        => 'application/pdf',
+            'Content-Disposition' => "attachment; filename=\"CFDI_{$factura->cfdi_uuid}.pdf\"",
+        ]);
+    }
+
+    /** GET /api/superadmin/empresas/{empresa}/recargas */
+    public function indexRecargas(\App\Models\Empresa $empresa)
+    {
+        $recargas = RecargaCredito::with('factura:id,cfdi_uuid,cfdi_status,monto')
+            ->where('empresa_id', $empresa->id)
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json(['data' => $recargas]);
+    }
+
+    /** POST /api/superadmin/recargas/{recarga}/facturar */
+    public function facturarRecarga(Request $request, RecargaCredito $recarga)
+    {
+        if ($recarga->factura_id) {
+            abort(422, 'Esta recarga ya tiene CFDI generado.');
+        }
+
+        $data = $request->validate([
+            'receptor'                => 'required|array',
+            'receptor.rfc'            => 'required|string|max:20',
+            'receptor.nombre'         => 'required|string|max:255',
+            'receptor.codigo_postal'  => 'required|string|max:10',
+            'receptor.regimen_fiscal' => 'required|string|max:10',
+            'receptor.uso_cfdi'       => 'required|string|max:10',
+            'receptor.email'          => 'required|email',
+        ]);
+
+        $this->assertSuperAdminReady();
+
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $ctx      = $this->superAdminCtx();
+        $pac      = $this->superAdminPac();
+        $serie    = SuperAdminConfig::get('fiscal_serie', 'SS');
+        $folio    = (int) SuperAdminConfig::get('fiscal_folio_actual', 0) + 1;
+
+        // Subtotal = pesos recargados. precio_con_iva = pesos * 1.16 → PAC des-IVA → subtotal $pesos + IVA 16%
+        $precioConIva = round((float) $recarga->pesos * 1.16, 2);
+
+        $invoice = [
+            'tipo'        => 'I',
+            'serie'       => $serie,
+            'folio'       => $folio,
+            'tasa_iva'    => 0.16,
+            'metodo_pago' => 'PUE',
+            'forma_pago'  => '03',
+            'emisor'      => $ctx,
+            'receptor'    => [
+                'es_publico'     => false,
+                'rfc'            => $data['receptor']['rfc'],
+                'nombre'         => $data['receptor']['nombre'],
+                'codigo_postal'  => $data['receptor']['codigo_postal'],
+                'regimen_fiscal' => $data['receptor']['regimen_fiscal'],
+                'uso_cfdi'       => $data['receptor']['uso_cfdi'],
+            ],
+            'items' => [[
+                'descripcion'    => 'Recarga de crédito CFDI — ' . $recarga->empresa->nombre,
+                'clave_sat'      => '80141600',
+                'clave_unidad'   => 'E48',
+                'unidad'         => 'Servicio',
+                'cantidad'       => 1,
+                'precio_con_iva' => $precioConIva,
+            ]],
+        ];
+
+        try {
+            $result = $pac->crearFactura($ctx, $invoice);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        SuperAdminConfig::set('fiscal_folio_actual', $folio);
+
+        $xml   = $result['xml']    ?? null;
+        $uuid  = $result['uuid']   ?? null;
+        $pacId = $result['pac_id'] ?? null;
+
+        $factura = SuscripcionFactura::create([
+            'empresa_id'        => $recarga->empresa_id,
+            'stripe_invoice_id' => null,
+            'cfdi_uuid'         => $uuid,
+            'cfdi_facturapi_id' => $provider === 'facturapi' ? $pacId : null,
+            'cfdi_pac_id'       => $pacId,
+            'cfdi_pac'          => $provider,
+            'cfdi_xml'          => $xml,
+            'cfdi_status'       => 'timbrado',
+            'receptor'          => $data['receptor'],
+            'monto'             => $precioConIva,
+            'moneda'            => 'MXN',
+            'concepto'          => 'Recarga de crédito CFDI — ' . $recarga->empresa->nombre,
+        ]);
+
+        $recarga->update(['factura_id' => $factura->id]);
+
+        // Guardar datos_facturacion para próximas facturas
+        $recarga->empresa->update(['datos_facturacion' => $data['receptor']]);
+
+        try {
+            $ctxPdf = array_merge($ctx, ['cfdi_xml' => $xml]);
+            $pdfRaw = $pac->descargarPdf($ctxPdf, $pacId);
+            $pdfB64 = base64_encode($pdfRaw);
+            Mail::to($data['receptor']['email'])
+                ->queue(new \App\Mail\FacturaSuscripcionMail($factura, $xml ?? '', $pdfB64));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("Error enviando mail recarga #{$recarga->id}: {$e->getMessage()}");
+        }
+
+        return response()->json([
+            'message' => 'CFDI generado correctamente',
+            'factura' => $factura,
+            'recarga' => $recarga->fresh('factura'),
+        ]);
+    }
+
+    /** POST /api/superadmin/facturas/{factura}/reenviar */
+    public function reenviarSuperAdmin(Request $request, SuscripcionFactura $factura)
+    {
+        $email = $request->input('email', $factura->receptor['email'] ?? null);
+        if (!$email) abort(422, 'Email requerido');
+
+        $pac    = \App\Services\Pac\PacManager::make($factura->cfdi_pac ?? 'sw_sapiens');
+        $ctx    = array_merge($this->superAdminCtx(), ['cfdi_xml' => $factura->cfdi_xml]);
+        $pdfRaw = $pac->descargarPdf($ctx, $factura->cfdi_pac_id);
+        $pdfB64 = base64_encode($pdfRaw);
+
+        Mail::to($email)->queue(new FacturaSuscripcionMail($factura, $factura->cfdi_xml ?? '', $pdfB64));
+
+        return response()->json(['message' => 'CFDI reenviado a ' . $email]);
     }
 }

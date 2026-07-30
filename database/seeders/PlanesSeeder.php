@@ -11,21 +11,6 @@ class PlanesSeeder extends Seeder
     {
         $planes = [
             [
-                'nombre'             => 'Gratis',
-                'descripcion'        => 'Para empezar. Solo el punto de venta.',
-                'precio_mensual'     => 0,
-                'max_sucursales'     => 1,
-                'max_usuarios'       => 1,
-                'timbres_incluidos'  => 0,
-                'color'              => 'green',
-                'tipo'               => 'gratis',
-                'activo'             => true,
-                'modulos'            => [
-                    'dashboard', 'pos', 'ventas', 'caja', 'cortes',
-                    'productos', 'categorias', 'clientes', 'ubicaciones',
-                ],
-            ],
-            [
                 'nombre'             => 'Básico',
                 'descripcion'        => 'POS completo + 50 timbres CFDI/mes + reportes.',
                 'precio_mensual'     => 499,
@@ -91,6 +76,6 @@ class PlanesSeeder extends Seeder
             );
         }
 
-        $this->command->info('✓ Planes sincronizados: Gratis, Básico, Pro, Ilimitado');
+        $this->command->info('✓ Planes sincronizados: Básico, Pro, Ilimitado');
     }
 }

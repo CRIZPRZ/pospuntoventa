@@ -13,7 +13,8 @@ class Empresa extends Model
         'nombre', 'slug', 'email', 'status',
         'plan_id', 'plan_vigente_hasta', 'plan_estado',
         'plan_precio_pactado', 'stripe_customer_id', 'stripe_subscription_id',
-        'datos_facturacion', 'timbres_extra',
+        'datos_facturacion', 'timbres_extra', 'pac_provider', 'whatsapp_provider',
+        'credito_timbres', 'costo_timbre',
     ];
 
     protected $casts = [
@@ -50,6 +51,49 @@ class Empresa extends Model
     public function modulosActivos(): array
     {
         return $this->modulos()->where('activo', true)->pluck('modulo_key')->toArray();
+    }
+
+    public function trialVigente(): bool
+    {
+        return in_array($this->plan_estado ?? 'sin_plan', ['trial', 'sin_plan'], true)
+            && (bool) $this->plan_vigente_hasta?->isFuture();
+    }
+
+    public function accesoSistemaVigente(): bool
+    {
+        $estado = $this->plan_estado ?? 'sin_plan';
+
+        if ($estado === 'activo') {
+            return $this->planVigente();
+        }
+
+        return $this->trialVigente();
+    }
+
+    public function limiteSucursales(): int
+    {
+        if ($this->trialVigente()) {
+            return 1;
+        }
+
+        if (($this->plan_estado ?? null) === 'activo' && $this->plan) {
+            return (int) $this->plan->max_sucursales;
+        }
+
+        return 0;
+    }
+
+    public function limiteUsuarios(): int
+    {
+        if ($this->trialVigente()) {
+            return 1;
+        }
+
+        if (($this->plan_estado ?? null) === 'activo' && $this->plan) {
+            return (int) $this->plan->max_usuarios;
+        }
+
+        return 0;
     }
 
     public function planVigente(): bool

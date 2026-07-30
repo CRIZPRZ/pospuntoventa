@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Empresa;
 use App\Models\EmpresaModulo;
 use App\Models\Plan;
+use App\Models\RecargaCredito;
 use App\Models\Sucursal;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -30,7 +31,15 @@ class EmpresaController extends Controller
         $empresa->load('modulos', 'plan');
         $empresa->loadCount('usuarios');
 
-        return response()->json(['data' => $empresa]);
+        $timbresUsadosMes = \App\Models\TimbreConsumo::where('empresa_id', $empresa->id)
+            ->whereYear('created_at', now()->year)
+            ->whereMonth('created_at', now()->month)
+            ->count();
+
+        $data = $empresa->toArray();
+        $data['timbres_usados_mes'] = $timbresUsadosMes;
+
+        return response()->json(['data' => $data]);
     }
 
     public function store(Request $request)
@@ -45,10 +54,12 @@ class EmpresaController extends Controller
 
         return DB::transaction(function () use ($data) {
             $empresa = Empresa::create([
-                'nombre' => $data['nombre'],
-                'slug'   => Empresa::generarSlug($data['nombre']),
-                'email'  => $data['email'],
-                'status' => 'activa',
+                'nombre'             => $data['nombre'],
+                'slug'               => Empresa::generarSlug($data['nombre']),
+                'email'              => $data['email'],
+                'status'             => 'activa',
+                'plan_estado'        => 'sin_plan',
+                'plan_vigente_hasta' => now(),
             ]);
 
             $roleId = DB::table('roles')->insertGetId([
@@ -102,9 +113,11 @@ class EmpresaController extends Controller
     public function update(Request $request, Empresa $empresa)
     {
         $data = $request->validate([
-            'nombre' => 'sometimes|string|max:255',
-            'email'  => 'sometimes|email|unique:empresas,email,' . $empresa->id,
-            'status' => 'sometimes|in:activa,suspendida',
+            'nombre'       => 'sometimes|string|max:255',
+            'email'        => 'sometimes|email|unique:empresas,email,' . $empresa->id,
+            'status'       => 'sometimes|in:activa,suspendida',
+            'pac_provider' => 'sometimes|in:facturapi,facturama,sw_sapiens',
+            'whatsapp_provider' => 'sometimes|in:cloud_api,baileys,disabled',
         ]);
 
         $empresa->update($data);
@@ -197,6 +210,57 @@ class EmpresaController extends Controller
         ]);
     }
 
+    public function recargarTimbres(Request $request, Empresa $empresa)
+    {
+        $data = $request->validate([
+            'cantidad'    => 'required|integer|min:1|max:10000',
+            'nota'        => 'nullable|string|max:255',
+        ]);
+
+        $empresa->increment('timbres_extra', (int) $data['cantidad']);
+
+        return response()->json([
+            'data'    => ['timbres_extra' => $empresa->fresh()->timbres_extra],
+            'message' => "{$data['cantidad']} timbres agregados correctamente",
+        ]);
+    }
+
+    public function recargarCredito(Request $request, Empresa $empresa)
+    {
+        $data = $request->validate([
+            'pesos'       => 'required|numeric|min:0|max:100000',
+            'costo_timbre'=> 'nullable|numeric|min:0.01|max:1000',
+        ]);
+
+        $pesos = (float) $data['pesos'];
+
+        if ($pesos > 0) {
+            $empresa->increment('credito_timbres', $pesos);
+
+            RecargaCredito::create([
+                'empresa_id'   => $empresa->id,
+                'pesos'        => $pesos,
+                'costo_timbre' => isset($data['costo_timbre']) ? (float) $data['costo_timbre'] : $empresa->costo_timbre,
+            ]);
+        }
+
+        if (isset($data['costo_timbre'])) {
+            $empresa->update(['costo_timbre' => (float) $data['costo_timbre']]);
+        }
+
+        $fresh = $empresa->fresh();
+        $msg = $pesos > 0
+            ? '$' . number_format($pesos, 2) . ' MXN agregados al crédito'
+            : 'Costo por timbre actualizado';
+        return response()->json([
+            'data'    => [
+                'credito_timbres' => (float) $fresh->credito_timbres,
+                'costo_timbre'    => (float) $fresh->costo_timbre,
+            ],
+            'message' => $msg,
+        ]);
+    }
+
     private function modulosDefault(): array
     {
         return [
@@ -204,7 +268,7 @@ class EmpresaController extends Controller
             'productos', 'categorias', 'clientes', 'abonos',
             'reportes', 'proveedores', 'pagos_proveedores',
             'cotizaciones', 'pedidos', 'usuarios', 'roles',
-            'sucursales', 'configuracion', 'camaras', 'ubicaciones',
+            'configuracion', 'camaras',
         ];
     }
 }

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Configuracion;
 use App\Models\ConfiguracionSucursal;
 use App\Models\WhatsAppConfig;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 class WhatsAppService
@@ -79,6 +80,10 @@ class WhatsAppService
 
     public function sendTextMessage(WhatsAppConfig $config, string $to, string $message): array
     {
+        if ($this->usesBaileys($config)) {
+            return app(BaileysWhatsAppService::class)->sendTextMessage($config, $to, $message);
+        }
+
         if (!$config->access_token || !$config->phone_number_id) {
             throw new \RuntimeException('La conexión técnica de WhatsApp aún no está completa.');
         }
@@ -108,6 +113,14 @@ class WhatsAppService
 
     public function sendTicketMessage(WhatsAppConfig $config, string $to, string $body, string $ticketUrl, string $buttonText = 'Ver ticket completo'): array
     {
+        if ($this->usesBaileys($config)) {
+            try {
+                return app(BaileysWhatsAppService::class)->sendUrlButtonMessage($config, $to, $body, $buttonText, $ticketUrl);
+            } catch (\Throwable) {
+                return $this->sendTextMessage($config, $to, $body . "\n\n" . $buttonText . ': ' . $ticketUrl);
+            }
+        }
+
         if (!$config->access_token || !$config->phone_number_id) {
             throw new \RuntimeException('La conexión técnica de WhatsApp aún no está completa.');
         }
@@ -139,12 +152,35 @@ class WhatsAppService
         return $response->json();
     }
 
+    public function sendCfdiMessage(WhatsAppConfig $config, string $to, string $body, string $pdfUrl, string $xmlUrl): void
+    {
+        if ($this->usesBaileys($config)) {
+            $this->sendTextMessage($config, $to, $body . "\nPDF: {$pdfUrl}\nXML: {$xmlUrl}");
+            return;
+        }
+
+        try {
+            $this->sendTicketMessage($config, $to, $body, $pdfUrl, '📄 Ver PDF');
+        } catch (\Throwable) {
+            $this->sendTextMessage($config, $to, $body . "\n📄 PDF: {$pdfUrl}");
+        }
+        try {
+            $this->sendTicketMessage($config, $to, '📁 Archivo XML de tu factura:', $xmlUrl, '⬇️ Descargar XML');
+        } catch (\Throwable) {
+            $this->sendTextMessage($config, $to, "📁 XML: {$xmlUrl}");
+        }
+    }
+
     public function sendTemplateMessage(
         WhatsAppConfig $config,
         string $to,
         string $templateName = 'hello_world',
         string $languageCode = 'en_US'
     ): array {
+        if ($this->usesBaileys($config)) {
+            return $this->sendTextMessage($config, $to, 'Prueba de WhatsApp desde EventPOS.');
+        }
+
         if (!$config->access_token || !$config->phone_number_id) {
             throw new \RuntimeException('La conexión técnica de WhatsApp aún no está completa.');
         }
@@ -174,6 +210,24 @@ class WhatsAppService
         return $response->json();
     }
 
+    public function resolveBusinessName(int $empresaId, ?int $sucursalId, WhatsAppConfig $technicalConfig, array $publicConfig = []): string
+    {
+        $sucursalCfg = $sucursalId
+            ? (ConfiguracionSucursal::where('empresa_id', $empresaId)
+                ->where('sucursal_id', $sucursalId)
+                ->first()?->config ?? [])
+            : [];
+
+        $empresaCfg = Configuracion::where('empresa_id', $empresaId)
+            ->first()?->config ?? [];
+
+        return ($sucursalCfg['nombre_comercial'] ?? null)
+            ?: ($empresaCfg['empresa']['nombre'] ?? null)
+            ?: $technicalConfig->display_name
+            ?: $technicalConfig->business_name
+            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+    }
+
     public function resolveTechnicalConfig(int $empresaId, ?int $sucursalId = null): ?WhatsAppConfig
     {
         if ($sucursalId) {
@@ -191,6 +245,53 @@ class WhatsAppService
             ->where('empresa_id', $empresaId)
             ->whereNull('sucursal_id')
             ->first();
+    }
+
+    public function isConnected(?WhatsAppConfig $config): bool
+    {
+        if (!$config) {
+            return false;
+        }
+
+        if ($this->usesBaileys($config)) {
+            if (!$config->session_key) {
+                return false;
+            }
+
+            try {
+                $payload = app(BaileysWhatsAppService::class)->getStatus($config);
+                $status = $payload['status'] ?? ($payload['connected'] ?? false ? 'connected' : ($config->status ?: 'disconnected'));
+                $patch = [
+                    'status' => $status,
+                    'last_error' => $payload['last_error'] ?? null,
+                ];
+
+                if ($status === 'connected') {
+                    $patch['connected_at'] = $config->connected_at ?: now();
+                    $patch['disconnected_at'] = null;
+                    $patch['connected_phone_number'] = $payload['phone_number'] ?? $config->connected_phone_number;
+                    $patch['display_name'] = $payload['display_name'] ?? $config->display_name;
+                } else {
+                    $patch['disconnected_at'] = now();
+                }
+
+                $config->forceFill($patch)->save();
+                $this->syncPublicBaileysStatus($config, $payload, $status);
+
+                return $status === 'connected';
+            } catch (\Throwable $e) {
+                $config->forceFill([
+                    'status' => 'error',
+                    'last_error' => $e->getMessage(),
+                    'disconnected_at' => now(),
+                ])->save();
+                $this->syncPublicBaileysStatus($config, ['last_error' => $e->getMessage()], 'error');
+
+                return false;
+            }
+        }
+
+        return (bool) ($config->access_token && $config->phone_number_id);
     }
 
     public function resolvePublicConfig(int $empresaId, ?int $sucursalId = null): array
@@ -229,6 +330,44 @@ class WhatsAppService
             return '52' . $digits;
         }
         return $digits;
+    }
+
+    private function usesBaileys(WhatsAppConfig $config): bool
+    {
+        return in_array($config->provider, ['baileys', 'whatsapp_web'], true);
+    }
+
+    private function syncPublicBaileysStatus(WhatsAppConfig $config, array $payload, string $status): void
+    {
+        $patch = [
+            'status' => $status,
+            'provider' => 'baileys',
+            'display_name' => $payload['display_name'] ?? ($config->display_name ?? ''),
+            'connected_phone_number' => $payload['phone_number'] ?? ($config->connected_phone_number ?? ''),
+            'last_error' => $payload['last_error'] ?? '',
+        ];
+
+        if ($config->sucursal_id) {
+            $row = ConfiguracionSucursal::firstOrCreate(
+                ['empresa_id' => $config->empresa_id, 'sucursal_id' => $config->sucursal_id],
+                ['config' => []]
+            );
+        } else {
+            $row = Configuracion::firstOrCreate(
+                ['empresa_id' => $config->empresa_id],
+                ['config' => []]
+            );
+        }
+
+        $current = $row->config ?? [];
+        $current['whatsapp'] = array_replace_recursive($current['whatsapp'] ?? [], $patch);
+        $row->config = $current;
+        $row->save();
+
+        Cache::forget('ventas_configuracion_' . $config->empresa_id);
+        if ($config->sucursal_id) {
+            Cache::forget('ventas_config_sucursal_' . $config->sucursal_id);
+        }
     }
 
     private function defaultPublicConfig(): array

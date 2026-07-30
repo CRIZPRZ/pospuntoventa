@@ -49,11 +49,11 @@ class CheckTrial
 
         // Trial o sin_plan: verificar vigencia
         if (in_array($estado, ['trial', 'sin_plan'])) {
-            // Sin fecha = trial indefinido (para pruebas internas)
             if (! $empresa->plan_vigente_hasta) {
-                return $next($request);
-            }
-            if ($empresa->plan_vigente_hasta->isFuture()) {
+                if (app()->environment('local', 'testing')) {
+                    return $next($request);
+                }
+            } elseif ($empresa->plan_vigente_hasta->isFuture()) {
                 return $next($request);
             }
         }

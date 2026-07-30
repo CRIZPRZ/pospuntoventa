@@ -231,15 +231,19 @@ class VentaController extends Controller
 
         $telefono = null;
 
-        if (!empty($data['cliente_id'])) {
+        if (!empty($data['telefono'])) {
+            $telefono = $data['telefono'];
+        } elseif (!empty($data['cliente_id'])) {
             $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
             $telefono = $cliente?->telefono;
-        } elseif (!empty($data['telefono'])) {
-            $telefono = $data['telefono'];
         }
 
         if (!$telefono) {
             return response()->json(['message' => 'No se encontró número de teléfono para enviar el ticket.'], 422);
+        }
+
+        if (strlen(preg_replace('/\D+/', '', $telefono) ?? '') < 10) {
+            return response()->json(['message' => 'El número de WhatsApp del cliente está incompleto. Corrígelo antes de enviar el ticket.'], 422);
         }
 
         $svc = app(WhatsAppService::class);
@@ -248,13 +252,15 @@ class VentaController extends Controller
         $publicConfig = $svc->resolvePublicConfig((int) $venta->empresa_id, $sucursalId);
         $technicalConfig = $svc->resolveTechnicalConfig((int) $venta->empresa_id, $sucursalId);
 
-        if (!$technicalConfig || !$technicalConfig->access_token || !$technicalConfig->phone_number_id) {
-            return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
+        if (!$svc->isConnected($technicalConfig)) {
+            $message = in_array($technicalConfig?->provider, ['baileys', 'whatsapp_web'], true)
+                ? 'La sesión de WhatsApp se desconectó. Vuelve a conectar con QR antes de enviar tickets.'
+                : 'WhatsApp no está conectado.';
+
+            return response()->json(['message' => $message], 422);
         }
 
-        $businessName = $technicalConfig->display_name
-            ?: $technicalConfig->business_name
-            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+        $businessName = $svc->resolveBusinessName((int) $venta->empresa_id, $sucursalId, $technicalConfig, $publicConfig);
 
         [$body, $ticketUrl] = SendVentaTicketToWhatsApp::buildTicketContent($venta, $businessName);
 

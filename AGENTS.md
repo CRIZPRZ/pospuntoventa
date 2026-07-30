@@ -13,6 +13,22 @@ Sistema de Punto de Venta (POS) completo **multi-tenant**. Cada negocio es una `
 - **Global Scopes**: en todos los modelos de datos. Filtra por `empresa_id` cuando `app()->bound('tenant_id')`.
 - **Auto-set empresa_id**: modelos tienen evento `creating` que pone `empresa_id = app('tenant_id')` automáticamente.
 - **Registro**: `POST /api/register` (público) — crea empresa + admin role (todos los permisos) + user admin → devuelve token.
+- **Alta default trial (2026-07-30)**: nuevos tenants ya no deben nacer con `facturacion`, `whatsapp`, `mercado_libre`, `sucursales` ni `ubicaciones`. La fuente de verdad queda en `RegisterController::MODULOS_TRIAL` y `EmpresaController::modulosDefault()`.
+- **Catálogo de planes vigente (2026-07-30)**: `Trial` sigue siendo un estado temporal del tenant, no un registro en `planes`. Los planes públicos sembrados por `PlanesSeeder` son `Básico`, `Pro` e `Ilimitado`. Los planes `manual`/personalizados se crean desde superadmin, no salen en `GET /api/planes` y no deben poder contratarse por checkout self-service.
+- **Trial desacoplado del plan comercial (2026-07-30)**: `RegisterController` puede recibir `plan_id` desde la UI, pero no debe persistirlo ni usarlo para módulos/timbres mientras `plan_estado='trial'`. Durante trial los límites operativos son propios: `1` sucursal, `1` usuario, `0` timbres CFDI incluidos.
+- **Paquetes one-time de timbres (2026-07-30)**: `BillingController::comprarTimbres()` cobra `50 → $149 MXN`, `200 → $549 MXN`, `500 → $1,199 MXN`. Si cambia el precio, actualizar también el selector visible del frontend en `MiPlan.jsx`.
+- **Hardening planes/trial (2026-07-30)**: los límites de `1` sucursal / `1` usuario del trial ya no son solo UX; `SucursalController::store()` y `UsuarioController::store()` deben validarlos server-side usando `Empresa::limiteSucursales()` y `Empresa::limiteUsuarios()`.
+- **`sin_plan` vencido por default (2026-07-30)**: en producción, `CheckTrial` ya no debe dejar pasar `trial`/`sin_plan` con `plan_vigente_hasta = null`; ese bypass queda solo para `local`/`testing`. Los tenants creados por superadmin nacen con `plan_estado='sin_plan'` y `plan_vigente_hasta=now()` hasta que se les asigne plan.
+- **Eliminar plan deja tenant bloqueado (2026-07-30)**: `SuperAdmin\\PlanController::destroy()` debe poner `plan_id=null`, `plan_estado='sin_plan'`, `plan_vigente_hasta=now()`, limpiar `plan_precio_pactado` y desactivar módulos para evitar que una empresa siga operando con acceso comercial huérfano.
+- **Registro público con rate limit (2026-07-30)**: `POST /api/register` debe usar `throttle:register` y `RateLimiter::for('register')` con cupos por IP. Si cambia la ruta de registro o se mueve de archivo, preservar este límite para evitar farming de trials.
+- **Anti-bot liviano en registro (2026-07-30)**: `RegisterController` valida honeypot `website` y `flow_started_at` para frenar automatizaciones básicas además del rate limit. No venderlo como seguridad fuerte; es una capa complementaria.
+- **Fuente de verdad de timbres en billing (2026-07-30)**: `BillingController::miPlan()` debe contar uso mensual desde `timbres_consumo`, no desde `ventas.cfdi_uuid`, para que la UI coincida con la lógica real de bloqueo en `FacturacionController`.
+- **Catálogo público self-service (2026-07-30)**: `BillingController::planesPublicos()` debe devolver solo planes `tipo='stripe'`. Aunque exista un plan legacy `gratis` o uno `manual`, no debe aparecer en landing/registro.
+- **Sin tipo gratis nuevo (2026-07-30)**: `SuperAdmin\\PlanController` y el frontend de superadmin ya no deben permitir crear/editar planes `tipo='gratis'`. El modelo comercial vigente es `trial` como estado temporal + planes `stripe` y `manual`.
+- **Webhook Stripe idempotente (2026-07-30)**: `WebhookController` registra `event_id` en `stripe_webhook_events` y debe ignorar duplicados. Esto evita dobles recargas de timbres o activaciones repetidas cuando Stripe reintenta eventos.
+- **Comando de saneamiento producción (2026-07-30)**: `php artisan billing:audit-production` reporta planes legacy `gratis`, empresas `sin_plan/trial` con módulos activos o sin vigencia y planes manuales con Stripe IDs. Con `--apply` corrige solo inconsistencias seguras.
+- **Permisos sensibles cerrados (2026-07-30)**: setup/upload/test de facturación CFDI ahora requieren `can:gestionar facturacion`. Las mutaciones de Mercado Libre (publicar, sync, pausar, unlink, kits, importar) requieren `can:gestionar mercado libre`; `can:ver mercado libre` queda para lecturas.
+- **Seeder crítico**: `database/seeders/DatabaseSeeder.php` debe llamar `PlanesSeeder::class`. Si se corre `php artisan migrate:fresh --seed` sin esa línea, el catálogo público queda vacío aunque `PlanesSeeder.php` esté correcto.
 - **Login/Me**: response incluye `empresa: { id, nombre, slug }`.
 - **Configuración**: archivo por tenant `storage/app/configuracion_{empresa_id}.json`, cache key `ventas_configuracion_{empresa_id}`, logo en `storage/app/public/config/{empresa_id}/`.
 - **WhatsApp Business**: la UX pública vive en `config.whatsapp`, pero las credenciales técnicas de Meta NO deben guardarse ni devolverse en ese JSON; van en `whatsapp_configs`.
@@ -52,6 +68,24 @@ Sistema de Punto de Venta (POS) completo **multi-tenant**. Cada negocio es una `
 - `disconnect` en scope sucursal elimina el override y hace que la sucursal vuelva a heredar el número general.
 - Config adicional requerida en `.env`: `WHATSAPP_APP_SECRET` y `WHATSAPP_LOGIN_CONFIGURATION_ID`.
 - Aunque `connect` soporta Embedded Signup, también acepta conexión manual enviando `phone_number_id`, `whatsapp_business_account_id` y `access_token` en el mismo endpoint para apps que aún no son Tech Provider/BSP.
+- **Doble proveedor WhatsApp (2026-07-02)**: `empresas.whatsapp_provider` decide el motor por tenant (`cloud_api`, `baileys`, `disabled`). El módulo `whatsapp` solo controla acceso/visibilidad. Superadmin lo cambia desde el frontend en Empresas.
+- **Baileys MVP**: `app/Services/BaileysWhatsAppService.php` llama al microservicio Node `whatsapp-baileys/` con `WHATSAPP_BAILEYS_URL` y `WHATSAPP_BAILEYS_TOKEN`. Nuevas rutas: `GET /api/whatsapp/qr` y `GET /api/whatsapp/status`. Laravel sigue siendo la única fachada pública; el frontend no habla directo con Node.
+- **Cola**: `SendVentaTicketToWhatsApp` implementa `ShouldQueue` para envíos automáticos, pero permanece deshabilitado en `AppServiceProvider` para evitar doble envío mientras el POS pregunte manualmente si manda el ticket.
+- **Bug resuelto provider visible**: `ConfiguracionController::attachWhatsAppConfig()` usa `empresas.whatsapp_provider` como fuente de verdad y solo hidrata datos técnicos cuando `whatsapp_configs.provider` coincide. No reintroducir el override desde la fila técnica.
+- **Bug resuelto QR inicial**: `WhatsAppController@qr` arranca/crea sesión Baileys si no existe fila `whatsapp_configs` compatible y el provider activo es `baileys`. No volver al error de sesión Baileys inexistente para tenants ya configurados en superadmin.
+- **Bug resuelto estado Baileys post-QR (2026-07-03)**: `GET /api/whatsapp/status` actualiza `config.whatsapp` y debe limpiar campos derivados (`empresa_default`, `inherits_from_empresa`, `scope_mode`) antes de persistir. `ConfiguracionController` también debe descartarlos al guardar, porque son solo datos resueltos para la UI.
+- **Bug resuelto QR conectado (2026-07-03)**: `WhatsAppController@qr` no debe confiar solo en `whatsapp_configs.status === connected`; debe consultar Node y persistir el estado real antes de decidir si hay QR o sesión conectada.
+- **Bug resuelto sesión Baileys rota (2026-07-03)**: `whatsapp-baileys/src/server.js` limpia la sesión local y genera QR nuevo cuando credenciales guardadas fallan con `Connection Failure`. `WhatsAppController@qr` persiste el status devuelto por Node (`qr_pending`/`connected`) en `config.whatsapp`.
+- **Bug resuelto timeout envío Baileys (2026-07-03)**: `whatsapp-baileys/src/server.js` usa `startingSessions` para no abrir sockets paralelos, captura `unhandledRejection`/`uncaughtException` y envuelve `sendMessage` con timeout controlado. `BaileysWhatsAppService` sube timeout HTTP a 60s.
+- **Bug resuelto número México Baileys (2026-07-03)**: `BaileysWhatsAppService::normalizePhone()` usa `521` para números MX de 10 dígitos. `whatsapp-baileys/src/server.js` resuelve el destinatario con `socket.onWhatsApp()` probando candidatos `521...` y `52...` antes de enviar.
+- **Fix JID México Baileys (2026-07-03)**: para evitar chats duplicados, Baileys debe priorizar `52 + 10 dígitos` sobre `521 + 10 dígitos`. `521` queda solo como fallback si `onWhatsApp()` no encuentra la variante `52`.
+- **Prioridad entrega MX Baileys (2026-07-03)**: no forzar `52...@s.whatsapp.net` si `onWhatsApp()` reconoce `521...`; forzar `52` puede dejar mensajes en `PENDING` sin entrega. Priorizar el JID confirmado por WhatsApp aunque visualmente pueda abrir/usar otro chat.
+- **Confirmación real Baileys (2026-07-03)**: Node no debe reportar éxito con `SERVER_ACK`; eso solo confirma servidor, no entrega al teléfono. Esperar `DELIVERY_ACK`, `READ` o `PLAYED`; si se queda en `PENDING/SERVER_ACK`, Laravel debe devolver error al usuario. Si `onWhatsApp()` devuelve `lid`, usar ese `lid` como destino preferente.
+- **Botón URL Baileys (2026-07-03)**: `WhatsAppService::sendTicketMessage()` llama `BaileysWhatsAppService::sendUrlButtonMessage()` cuando el provider es Baileys. Node envía `interactiveMessage.nativeFlowMessage` con `cta_url`; si falla, fallback a texto con link.
+- **UX cliente WhatsApp QR (2026-07-03)**: el backend mantiene `provider=baileys` internamente, pero la UI del cliente no debe exponer ese proveedor ni términos de infraestructura. La compatibilidad con Cloud API debe mantenerse separada y sin regresiones.
+- **POS ticket WhatsApp (2026-07-03)**: `VentaController@enviarWhatsApp` debe preferir `telefono` del payload aunque venga `cliente_id` y rechazar teléfonos con menos de 10 dígitos. Evita falsos enviados cuando el cliente tiene un teléfono incompleto guardado.
+- **Estado real Baileys al enviar (2026-07-03)**: `WhatsAppService::isConnected()` no debe confiar solo en `whatsapp_configs.status` para Baileys. Siempre consulta `whatsapp-baileys /status`, actualiza `whatsapp_configs`, sincroniza `config.whatsapp` y limpia cache (`ventas_configuracion_*`, `ventas_config_sucursal_*`). Así el POS no muestra/enruta como conectado una sesión caída con `Connection Failure`.
+- **Docker local Baileys**: correr `whatsapp-baileys` dentro del contenedor `ventas-app` con Node 20: `docker compose exec app sh -lc 'cd /var/www/ventas/whatsapp-baileys && npm run dev'`. En este modo `WHATSAPP_BAILEYS_URL=http://127.0.0.1:3025`. No usar Node 25 del host: conecta a WhatsApp pero falla antes de emitir QR.
 - `POST /api/whatsapp/test` primero intenta texto libre y, si Meta bloquea por la ventana de 24 horas, reintenta con la plantilla `hello_world` para que el número de prueba de Meta siga siendo útil durante desarrollo.
 - Automatización ya conectada: `VentaCompletada` dispara `SendVentaTicketToWhatsApp` y respeta `config.whatsapp.auto_send_ticket` con resolución `empresa + sucursal con fallback`.
 - Condiciones actuales del ticket automático: la venta debe tener `cliente_id`, el cliente debe tener `telefono`, y la conexión técnica del alcance efectivo debe estar completa.
@@ -176,6 +210,39 @@ Siempre verificar que la tabla en migration y `$table` del model coincidan.
 - `pedidos`: ya tenía empresa_id, se agrega sucursal_id → misma migration.
 - **IMPORTANTE**: Sin correr esta migration, cotizaciones/pedidos/pagos-proveedores dan 500 porque `applySucursalScope` usa `where('sucursal_id', ...)` que no existe.
 - `CortesController`: todas las queries raw ahora filtran por `empresa_id` (tenant) y `sucursal_id`.
+
+## Módulo Facturación CFDI 4.0 — Multi-PAC (2026-06-17)
+
+### Arquitectura
+- **`app/Services/Pac/PacContract`** (interface): `key, setup, subirCsd, crearFactura, descargarXml, descargarPdf, cancelarFactura, test`
+- **`app/Services/Pac/FacturapiPac`**: envuelve `FacturapiService`, `tax_included:true`
+- **`app/Services/Pac/FacturamaPac`**: Basic Auth global (`FACTURAMA_USER/PASSWORD`), una cuenta, cada tenant = emisor por RFC. Des-IVAr por ítem (`precio / (1+tasa)`), `TaxObject:'02'`, desglose explícito de IVA. Facturama NO acepta `tax_included`.
+- **`app/Services/Pac/PacManager::for(?Empresa)`**: resuelve PAC por `empresa.pac_provider` (default `'facturama'`)
+- **`app/Models/TimbreConsumo`**: ledger atómico de timbres — fila por timbre exitoso
+- **`FacturacionController`**: helpers `pac()`, `emisorCtx()`, `buildNormalizedInvoice()`. Créditos con `DB::transaction` + `lockForUpdate` + conteo desde `timbres_consumo`
+
+### Columnas nuevas / renombradas (migraciones `2026_06_17_*`)
+- `empresas.pac_provider` string default `'facturama'` — controlado por superadmin
+- `ventas.cfdi_pac_id` (renombrado de `cfdi_facturapi_id`) + `ventas.cfdi_pac` (qué PAC timbró)
+- Tabla `timbres_consumo`: `empresa_id, sucursal_id, venta_id, pac, uuid, created_at`
+
+### Reglas críticas
+- Descarga PDF / cancelación: usa `venta->cfdi_pac` para resolver PAC aunque el tenant cambie de PAC después.
+- Timbre extra: decrementar `timbres_extra` SOLO tras timbrado exitoso (dentro del transaction, fuera del PAC call).
+- `SuperAdmin\EmpresaController::update` acepta `pac_provider` (`in:facturapi,facturama`).
+
+### `.env` necesario
+```
+FACTURAMA_USER=...
+FACTURAMA_PASSWORD=...
+FACTURAMA_SANDBOX=true
+```
+
+### Migraciones a correr en producción
+```
+php artisan migrate --force
+```
+(3 migraciones de fecha `2026_06_17_000001/2/3`)
 
 ## Estado del proyecto
 - [x] Estructura base Laravel 13

@@ -39,6 +39,19 @@ return [
         'user_key' => env('FACTURAPI_USER_KEY'),
     ],
 
+    'facturama' => [
+        'user'     => env('FACTURAMA_USER'),
+        'password' => env('FACTURAMA_PASSWORD'),
+        'sandbox'  => env('FACTURAMA_SANDBOX', true),
+    ],
+
+    'sw_sapiens' => [
+        'user'     => env('SW_SAPIENS_USER'),
+        'password' => env('SW_SAPIENS_PASSWORD'),
+        'sandbox'  => env('SW_SAPIENS_SANDBOX', true),
+        'token'    => env('SW_SAPIENS_TOKEN'),  // token estático opcional (Conectia sandbox infinito)
+    ],
+
     'mercadolibre' => [
         'client_id' => env('MELI_CLIENT_ID'),
         'client_secret' => env('MELI_CLIENT_SECRET'),
@@ -54,6 +67,8 @@ return [
         'login_configuration_id' => env('WHATSAPP_LOGIN_CONFIGURATION_ID'),
         'embedded_signup_url' => env('WHATSAPP_EMBEDDED_SIGNUP_URL'),
         'redirect_uri' => env('WHATSAPP_REDIRECT_URI'),
+        'baileys_url' => env('WHATSAPP_BAILEYS_URL', 'http://127.0.0.1:3025'),
+        'baileys_token' => env('WHATSAPP_BAILEYS_TOKEN'),
     ],
 
     'stripe' => [

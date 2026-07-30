@@ -27,7 +27,7 @@ class BillingController extends Controller
     public function planesPublicos()
     {
         $planes = Plan::where('activo', true)
-            ->where('tipo', '!=', 'manual')
+            ->where('tipo', 'stripe')
             ->orderBy('precio_mensual')
             ->get(['id', 'nombre', 'descripcion', 'precio_mensual', 'max_sucursales', 'max_usuarios', 'modulos', 'color', 'tipo']);
 
@@ -47,6 +47,9 @@ class BillingController extends Controller
         }
 
         $empresa->load('plan');
+        $estado = $empresa->plan_estado ?? 'sin_plan';
+        $trialVigente = $empresa->trialVigente();
+        $plan = $empresa->plan;
 
         $sucursalesCount = DB::table('sucursales')
             ->where('empresa_id', $empresa->id)
@@ -60,28 +63,29 @@ class BillingController extends Controller
             $diasRestantes = max(0, (int) now()->diffInDays($empresa->plan_vigente_hasta, false));
         }
 
-        $timbresIncluidos = $empresa->plan?->timbres_incluidos ?? 0;
-        $timbresUsados    = DB::table('ventas')
+        $timbresIncluidos = $trialVigente ? 0 : ($plan?->timbres_incluidos ?? 0);
+        $timbresUsados    = DB::table('timbres_consumo')
             ->where('empresa_id', $empresa->id)
-            ->whereNotNull('cfdi_uuid')
             ->whereYear('created_at', now()->year)
             ->whereMonth('created_at', now()->month)
             ->count();
 
         return response()->json([
             'data' => [
-                'plan'               => $empresa->plan,
-                'plan_estado'        => $empresa->plan_estado,
+                'plan'               => $trialVigente ? null : $plan,
+                'plan_estado'        => $estado,
                 'plan_vigente_hasta' => $empresa->plan_vigente_hasta,
                 'dias_restantes'     => $diasRestantes,
-                'vigente'            => $empresa->planVigente(),
-                'max_sucursales'     => $empresa->plan?->max_sucursales ?? -1,
-                'max_usuarios'       => $empresa->plan?->max_usuarios ?? -1,
+                'vigente'            => $estado === 'activo' ? $empresa->planVigente() : $trialVigente,
+                'max_sucursales'     => $trialVigente ? 1 : ($plan?->max_sucursales ?? -1),
+                'max_usuarios'       => $trialVigente ? 1 : ($plan?->max_usuarios ?? -1),
                 'uso_sucursales'     => $sucursalesCount,
                 'uso_usuarios'       => $usuariosCount,
                 'timbres_incluidos'  => $timbresIncluidos,
                 'timbres_usados'     => $timbresUsados,
                 'timbres_extra'      => (int) ($empresa->timbres_extra ?? 0),
+                'credito_timbres'    => (float) ($empresa->credito_timbres ?? 0),
+                'costo_timbre'       => (float) ($empresa->costo_timbre ?? 2),
                 'stripe_customer_id'  => $empresa->stripe_customer_id,
                 'tiene_suscripcion'   => (bool) $empresa->stripe_subscription_id,
                 'datos_facturacion'   => $empresa->datos_facturacion,
@@ -274,7 +278,7 @@ class BillingController extends Controller
     /**
      * POST /api/billing/comprar-timbres
      * Crea Stripe Checkout one-time para paquete de timbres CFDI.
-     * Paquetes disponibles: 50 → $100, 200 → $350, 500 → $750 MXN
+     * Paquetes disponibles: 50 → $149, 200 → $549, 500 → $1199 MXN
      */
     public function comprarTimbres(Request $request)
     {
@@ -289,9 +293,9 @@ class BillingController extends Controller
         $empresa = $request->user()->empresa;
 
         $precios = [
-            50  => ['monto' => 10000, 'label' => '50 timbres CFDI'],  // $100 MXN en centavos
-            200 => ['monto' => 35000, 'label' => '200 timbres CFDI'], // $350 MXN
-            500 => ['monto' => 75000, 'label' => '500 timbres CFDI'], // $750 MXN
+            50  => ['monto' => 14900, 'label' => '50 timbres CFDI'],   // $149 MXN en centavos
+            200 => ['monto' => 54900, 'label' => '200 timbres CFDI'],  // $549 MXN
+            500 => ['monto' => 119900, 'label' => '500 timbres CFDI'], // $1199 MXN
         ];
 
         $paquete = $precios[$data['cantidad']];
