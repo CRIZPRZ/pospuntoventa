@@ -69,6 +69,7 @@ return [
         'redirect_uri' => env('WHATSAPP_REDIRECT_URI'),
         'baileys_url' => env('WHATSAPP_BAILEYS_URL', 'http://127.0.0.1:3025'),
         'baileys_token' => env('WHATSAPP_BAILEYS_TOKEN'),
+        'public_url' => env('WHATSAPP_PUBLIC_URL'),
     ],
 
     'stripe' => [

@@ -33,29 +33,29 @@ return new class extends Migration
             });
         }
 
-        // Poblar sucursal_id en cotizaciones existentes
-        DB::statement('
-            UPDATE cotizaciones c
-            JOIN sucursales s ON s.empresa_id = c.empresa_id AND s.es_principal = 1
-            SET c.sucursal_id = s.id
-            WHERE c.sucursal_id IS NULL AND c.empresa_id IS NOT NULL
-        ');
+        foreach (['cotizaciones' => 'c', 'pedidos' => 'p', 'pagos_proveedores' => 'pp'] as $table => $alias) {
+            if (DB::getDriverName() === 'sqlite') {
+                DB::statement("
+                    UPDATE {$table}
+                    SET sucursal_id = (
+                        SELECT sucursales.id
+                        FROM sucursales
+                        WHERE sucursales.empresa_id = {$table}.empresa_id
+                          AND sucursales.es_principal = 1
+                        LIMIT 1
+                    )
+                    WHERE sucursal_id IS NULL AND empresa_id IS NOT NULL
+                ");
+                continue;
+            }
 
-        // Poblar sucursal_id en pedidos existentes
-        DB::statement('
-            UPDATE pedidos p
-            JOIN sucursales s ON s.empresa_id = p.empresa_id AND s.es_principal = 1
-            SET p.sucursal_id = s.id
-            WHERE p.sucursal_id IS NULL AND p.empresa_id IS NOT NULL
-        ');
-
-        // Poblar sucursal_id en pagos_proveedores existentes
-        DB::statement('
-            UPDATE pagos_proveedores pp
-            JOIN sucursales s ON s.empresa_id = pp.empresa_id AND s.es_principal = 1
-            SET pp.sucursal_id = s.id
-            WHERE pp.sucursal_id IS NULL AND pp.empresa_id IS NOT NULL
-        ');
+            DB::statement("
+                UPDATE {$table} {$alias}
+                JOIN sucursales s ON s.empresa_id = {$alias}.empresa_id AND s.es_principal = 1
+                SET {$alias}.sucursal_id = s.id
+                WHERE {$alias}.sucursal_id IS NULL AND {$alias}.empresa_id IS NOT NULL
+            ");
+        }
     }
 
     public function down(): void

@@ -2,11 +2,8 @@
 
 namespace App\Providers;
 
-use App\Events\VentaCompletada;
-use App\Listeners\SyncStockToMercadoLibre;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
@@ -26,12 +23,12 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
-        Event::listen(
-            VentaCompletada::class,
-            SyncStockToMercadoLibre::class,
-        );
+        RateLimiter::for('whatsapp', function (Request $request) {
+            $tenantId = app()->bound('tenant_id') ? (string) app('tenant_id') : 'no-tenant';
+            $userId = (string) ($request->user()?->id ?? $request->ip());
 
-        // SendVentaTicketToWhatsApp deshabilitado — el POS pregunta al cajero
-        // si quiere enviar ticket por WA. El listener causaba doble mensaje.
+            return Limit::perMinute(20)->by($tenantId . ':' . $userId);
+        });
+
     }
 }

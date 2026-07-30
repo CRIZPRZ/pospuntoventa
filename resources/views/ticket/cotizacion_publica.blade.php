@@ -32,6 +32,15 @@
   .msg-reject { background: #fef2f2; border: 1.5px solid #fecaca; color: #991b1b; }
   .msg-vencida { background: #fffbeb; border: 1.5px solid #fde68a; color: #92400e; }
 
+  /* Full-screen feedback while a decision is being processed */
+  .decision-loading { position: fixed; inset: 0; z-index: 1000; display: none; align-items: center; justify-content: center; padding: 24px; background: rgba(15, 23, 42, .72); backdrop-filter: blur(3px); }
+  .decision-loading.active { display: flex; }
+  .decision-loading-card { width: min(100%, 340px); padding: 28px 24px; border-radius: 18px; background: white; text-align: center; box-shadow: 0 24px 60px rgba(15, 23, 42, .3); }
+  .decision-spinner { width: 42px; height: 42px; margin: 0 auto 16px; border: 4px solid #dbeafe; border-top-color: {{ $headerColor }}; border-radius: 50%; animation: decision-spin .75s linear infinite; }
+  .decision-loading-title { color: #0f172a; font-size: 17px; font-weight: 700; }
+  .decision-loading-copy { margin-top: 7px; color: #64748b; font-size: 13px; line-height: 1.45; }
+  @keyframes decision-spin { to { transform: rotate(360deg); } }
+
   /* Card */
   .card { background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
 
@@ -99,14 +108,14 @@
         ↓ Descargar PDF
       </a>
       @if($canAct)
-        <form method="POST" action="{{ route('ticket.cotizacion.rechazar', $token) }}" style="display:inline">
+        <form method="POST" action="{{ route('ticket.cotizacion.rechazar', $token) }}" class="decision-form" data-loading-title="Registrando rechazo..." style="display:inline">
           @csrf
           <button type="submit" class="btn btn-reject"
             onclick="return confirm('¿Confirmas que deseas rechazar esta cotización?')">
             ✕ Rechazar
           </button>
         </form>
-        <form method="POST" action="{{ route('ticket.cotizacion.aceptar', $token) }}" style="display:inline">
+        <form method="POST" action="{{ route('ticket.cotizacion.aceptar', $token) }}" class="decision-form" data-loading-title="Aceptando cotización..." style="display:inline">
           @csrf
           <button type="submit" class="btn btn-accept"
             onclick="return confirm('¿Confirmas que deseas aceptar esta cotización?')">
@@ -125,6 +134,18 @@
     @endphp
     <div class="msg-box {{ $isAccept ? 'msg-accept' : ($isReject ? 'msg-reject' : 'msg-vencida') }}">
       {{ session('action_msg') }}
+    </div>
+  @elseif(!$canAct)
+    @php
+      $finalMessage = match($cotizacion->status) {
+        'aceptada' => 'Esta cotización ya fue aceptada y se generó el pedido.',
+        'rechazada' => 'Esta cotización fue rechazada. La decisión ya no puede modificarse.',
+        'vencida' => 'Esta cotización venció y ya no admite una decisión.',
+        default => 'Esta cotización ya no admite cambios.',
+      };
+    @endphp
+    <div class="msg-box {{ $cotizacion->status === 'aceptada' ? 'msg-accept' : ($cotizacion->status === 'rechazada' ? 'msg-reject' : 'msg-vencida') }}">
+      {{ $finalMessage }}
     </div>
   @endif
 
@@ -225,5 +246,44 @@
 
   </div>
 </div>
+
+<div id="decision-loading" class="decision-loading" role="status" aria-live="polite" aria-hidden="true">
+  <div class="decision-loading-card">
+    <div class="decision-spinner"></div>
+    <div id="decision-loading-title" class="decision-loading-title">Procesando decisión...</div>
+    <div class="decision-loading-copy">Espera un momento. No cierres esta página.</div>
+  </div>
+</div>
+
+<script>
+  (() => {
+    const overlay = document.getElementById('decision-loading')
+    const title = document.getElementById('decision-loading-title')
+    const forms = document.querySelectorAll('.decision-form')
+
+    const hideLoading = () => {
+      overlay?.classList.remove('active')
+      overlay?.setAttribute('aria-hidden', 'true')
+      document.body.style.overflow = ''
+      forms.forEach((form) => {
+        form.querySelectorAll('button').forEach((button) => { button.disabled = false })
+      })
+    }
+
+    forms.forEach((form) => {
+      form.addEventListener('submit', () => {
+        title.textContent = form.dataset.loadingTitle || 'Procesando decisión...'
+        forms.forEach((item) => {
+          item.querySelectorAll('button').forEach((button) => { button.disabled = true })
+        })
+        overlay.classList.add('active')
+        overlay.setAttribute('aria-hidden', 'false')
+        document.body.style.overflow = 'hidden'
+      })
+    })
+
+    window.addEventListener('pageshow', hideLoading)
+  })()
+</script>
 </body>
 </html>

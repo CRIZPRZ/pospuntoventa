@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\Cliente;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
+use App\Services\PaymentReminderWhatsAppMessage;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -100,6 +101,7 @@ class ClienteController extends Controller
         $telefono = null;
         if (!empty($data['telefono'])) {
             $telefono = $data['telefono'];
+            $cliente->update(['telefono' => $telefono]);
         } elseif ($cliente->telefono) {
             $telefono = $cliente->telefono;
         }
@@ -112,28 +114,19 @@ class ClienteController extends Controller
         $sucursalId = app()->bound('sucursal_id') ? (int) app('sucursal_id') : null;
 
         $svc          = app(WhatsAppService::class);
-        $publicCfg    = $svc->resolvePublicConfig($empresaId, $sucursalId);
+
+        if (!$svc->isFeatureEnabled($empresaId, $sucursalId, 'auto_send_payment_reminder')) {
+            return response()->json(['message' => 'Los recordatorios de pago por WhatsApp están desactivados en Configuración.'], 422);
+        }
+
         $technicalCfg = $svc->resolveTechnicalConfig($empresaId, $sucursalId);
 
         if (!$svc->isConnected($technicalCfg)) {
             return response()->json(['message' => 'WhatsApp no está conectado.'], 422);
         }
 
-        $businessName = $technicalCfg->display_name
-            ?: $technicalCfg->business_name
-            ?: ($publicCfg['business_name'] ?? 'Tu negocio');
-
-        $saldo = number_format((float) ($cliente->saldo_credito ?? 0), 2);
-
-        $body = implode("\n", [
-            "💳 *Recordatorio de pago — {$businessName}*",
-            '',
-            "Hola {$cliente->nombre},",
-            '',
-            "Te recordamos que tienes un saldo pendiente de *\${$saldo}*.",
-            '',
-            'Por favor comunícate con nosotros para ponerte al corriente. ¡Gracias! 🙏',
-        ]);
+        $businessName = $svc->resolveConfiguredBusinessName($empresaId, $sucursalId);
+        $body = PaymentReminderWhatsAppMessage::build($cliente, $businessName);
 
         try {
             $svc->sendTextMessage($technicalCfg, $telefono, $body);

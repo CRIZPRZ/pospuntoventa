@@ -47,13 +47,25 @@ return new class extends Migration
             }
         }
 
-        // Abonos no tienen empresa_id — asignar via su venta
-        DB::statement("
-            UPDATE abonos a
-            INNER JOIN ventas v ON v.id = a.venta_id
-            SET a.sucursal_id = v.sucursal_id
-            WHERE a.sucursal_id IS NULL AND a.venta_id IS NOT NULL
-        ");
+        // Abonos no tienen empresa_id: asignar la sucursal mediante su venta.
+        if (DB::getDriverName() === 'sqlite') {
+            DB::statement("
+                UPDATE abonos
+                SET sucursal_id = (
+                    SELECT ventas.sucursal_id
+                    FROM ventas
+                    WHERE ventas.id = abonos.venta_id
+                )
+                WHERE sucursal_id IS NULL AND venta_id IS NOT NULL
+            ");
+        } else {
+            DB::statement("
+                UPDATE abonos a
+                INNER JOIN ventas v ON v.id = a.venta_id
+                SET a.sucursal_id = v.sucursal_id
+                WHERE a.sucursal_id IS NULL AND a.venta_id IS NOT NULL
+            ");
+        }
     }
 
     public function down(): void

@@ -59,40 +59,48 @@ class TicketPublicoController extends Controller
     {
         $cotizacion = Cotizacion::withoutGlobalScopes()
             ->where('ticket_token', $token)
-            ->with(['items.producto'])
             ->firstOrFail();
 
-        if (!in_array($cotizacion->status, ['borrador', 'enviada'])) {
-            return back()->with('action_msg', match($cotizacion->status) {
-                'aceptada'  => 'Esta cotización ya fue aceptada.',
-                'rechazada' => 'Esta cotización ya fue rechazada.',
-                'vencida'   => 'Esta cotización ya venció.',
-                default     => 'No se puede modificar el estado de esta cotización.',
-            });
-        }
+        $actionMessage = null;
+        $accepted = false;
 
-        DB::transaction(function () use ($cotizacion) {
-            $cotizacion->update(['status' => 'aceptada']);
+        DB::transaction(function () use ($cotizacion, &$actionMessage, &$accepted) {
+            $locked = Cotizacion::withoutGlobalScopes()
+                ->whereKey($cotizacion->id)
+                ->lockForUpdate()
+                ->firstOrFail();
 
-            // Create pedido from cotizacion
+            if (!in_array($locked->status, ['borrador', 'enviada'])) {
+                $actionMessage = match($locked->status) {
+                    'aceptada'  => 'Esta cotización ya fue aceptada.',
+                    'rechazada' => 'Esta cotización ya fue rechazada.',
+                    'vencida'   => 'Esta cotización ya venció.',
+                    default     => 'No se puede modificar el estado de esta cotización.',
+                };
+                return;
+            }
+
+            $locked->load(['items.producto']);
+            $locked->update(['status' => 'aceptada']);
+
             $pedido = Pedido::create([
-                'empresa_id'       => $cotizacion->empresa_id,
-                'sucursal_id'      => $cotizacion->sucursal_id,
-                'cliente_id'       => $cotizacion->cliente_id,
-                'nombre_cliente'   => $cotizacion->nombre_cliente,
-                'vendedor_id'      => $cotizacion->vendedor_id,
-                'cotizacion_id'    => $cotizacion->id,
+                'empresa_id'       => $locked->empresa_id,
+                'sucursal_id'      => $locked->sucursal_id,
+                'cliente_id'       => $locked->cliente_id,
+                'nombre_cliente'   => $locked->nombre_cliente,
+                'vendedor_id'      => $locked->vendedor_id,
+                'cotizacion_id'    => $locked->id,
                 'fecha'            => now()->toDateString(),
-                'fecha_entrega'    => $cotizacion->fecha_vencimiento,
-                'subtotal'         => $cotizacion->subtotal,
-                'descuento'        => $cotizacion->descuento,
-                'impuesto_pct'     => $cotizacion->impuesto_pct,
-                'total'            => $cotizacion->total,
-                'notas'            => $cotizacion->notas,
+                'fecha_entrega'    => $locked->fecha_vencimiento,
+                'subtotal'         => $locked->subtotal,
+                'descuento'        => $locked->descuento,
+                'impuesto_pct'     => $locked->impuesto_pct,
+                'total'            => $locked->total,
+                'notas'            => $locked->notas,
                 'status'           => 'pendiente',
             ]);
 
-            foreach ($cotizacion->items as $item) {
+            foreach ($locked->items as $item) {
                 PedidoItem::create([
                     'pedido_id'       => $pedido->id,
                     'producto_id'     => $item->producto_id,
@@ -103,8 +111,15 @@ class TicketPublicoController extends Controller
                     'subtotal'        => $item->subtotal,
                 ]);
             }
+
+            $accepted = true;
         });
 
+        if (!$accepted) {
+            return back()->with('action_msg', $actionMessage);
+        }
+
+        $cotizacion->refresh();
         $this->notificarNegocio($cotizacion, 'aceptada');
 
         return back()->with('action_msg', '¡Cotización aceptada! Se ha generado un pedido.');
@@ -116,12 +131,34 @@ class TicketPublicoController extends Controller
             ->where('ticket_token', $token)
             ->firstOrFail();
 
-        if (!in_array($cotizacion->status, ['borrador', 'enviada'])) {
-            return back()->with('action_msg', 'No se puede modificar el estado de esta cotización.');
+        $actionMessage = null;
+        $rejected = false;
+
+        DB::transaction(function () use ($cotizacion, &$actionMessage, &$rejected) {
+            $locked = Cotizacion::withoutGlobalScopes()
+                ->whereKey($cotizacion->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (!in_array($locked->status, ['borrador', 'enviada'])) {
+                $actionMessage = match($locked->status) {
+                    'aceptada'  => 'Esta cotización ya fue aceptada.',
+                    'rechazada' => 'Esta cotización ya fue rechazada.',
+                    'vencida'   => 'Esta cotización ya venció.',
+                    default     => 'No se puede modificar el estado de esta cotización.',
+                };
+                return;
+            }
+
+            $locked->update(['status' => 'rechazada']);
+            $rejected = true;
+        });
+
+        if (!$rejected) {
+            return back()->with('action_msg', $actionMessage);
         }
 
-        $cotizacion->update(['status' => 'rechazada']);
-
+        $cotizacion->refresh();
         $this->notificarNegocio($cotizacion, 'rechazada');
 
         return back()->with('action_msg', 'Cotización rechazada.');
@@ -136,6 +173,7 @@ class TicketPublicoController extends Controller
             $documentos = $config[4];
 
             $technicalConfig = $svc->resolveTechnicalConfig((int) $cotizacion->empresa_id);
+            if (!$svc->isFeatureEnabled((int) $cotizacion->empresa_id, null, 'auto_send_quote')) return;
             if (!$svc->isConnected($technicalConfig)) return;
 
             // Send to empresa's configured phone number

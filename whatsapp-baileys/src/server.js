@@ -1,6 +1,5 @@
 import 'dotenv/config'
 import express from 'express'
-import cors from 'cors'
 import fs from 'node:fs'
 import path from 'node:path'
 import P from 'pino'
@@ -9,8 +8,6 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  generateWAMessageFromContent,
-  proto,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys'
 
@@ -23,6 +20,14 @@ const logger = P({ level: process.env.LOG_LEVEL || 'info' })
 const sessions = new Map()
 const startingSessions = new Map()
 const messageWaiters = new Map()
+const reconnectAttempts = new Map()
+const reconnectTimers = new Map()
+let shuttingDown = false
+
+if (!token) {
+  logger.fatal('BAILEYS_AUTH_TOKEN is required')
+  process.exit(1)
+}
 
 process.on('unhandledRejection', (error) => {
   logger.error({ error }, 'Unhandled rejection in Baileys service')
@@ -32,27 +37,42 @@ process.on('uncaughtException', (error) => {
   logger.error({ error }, 'Uncaught exception in Baileys service')
 })
 
-app.use(cors())
+app.disable('x-powered-by')
 app.use(express.json({ limit: '1mb' }))
 
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    active_sessions: sessions.size,
+    starting_sessions: startingSessions.size,
+  })
+})
+
 app.use((req, res, next) => {
-  if (!token) return next()
   const header = req.headers.authorization || ''
   if (header === `Bearer ${token}`) return next()
   return res.status(401).json({ message: 'No autorizado' })
 })
 
+function assertSessionKey(sessionKey) {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(String(sessionKey || ''))) {
+    throw new Error('session_key inválido')
+  }
+}
+
 function sessionPath(sessionKey) {
+  assertSessionKey(sessionKey)
   return path.join(sessionsDir, sessionKey)
 }
 
 function clearStoredSession(sessionKey) {
+  assertSessionKey(sessionKey)
   sessions.delete(sessionKey)
   fs.rmSync(sessionPath(sessionKey), { recursive: true, force: true })
 }
 
 async function startSocket(sessionKey, meta = {}) {
-  if (!sessionKey) throw new Error('session_key requerido')
+  assertSessionKey(sessionKey)
 
   if (sessions.has(sessionKey)) {
     return sessions.get(sessionKey)
@@ -70,7 +90,6 @@ async function startSocket(sessionKey, meta = {}) {
 }
 
 async function createSocket(sessionKey, meta = {}) {
-
   fs.mkdirSync(sessionPath(sessionKey), { recursive: true })
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath(sessionKey))
   const { version } = await fetchLatestBaileysVersion()
@@ -120,6 +139,10 @@ async function createSocket(sessionKey, meta = {}) {
     }
 
     if (update.connection === 'open') {
+      reconnectAttempts.delete(sessionKey)
+      const reconnectTimer = reconnectTimers.get(sessionKey)
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      reconnectTimers.delete(sessionKey)
       current.status = 'connected'
       current.qr = null
       current.qrImage = null
@@ -133,15 +156,46 @@ async function createSocket(sessionKey, meta = {}) {
       const code = update.lastDisconnect?.error?.output?.statusCode
       const message = update.lastDisconnect?.error?.message || ''
       const shouldResetSession = message.includes('Connection Failure')
-      const shouldReconnect = code !== DisconnectReason.loggedOut && !shouldResetSession
+      const shouldReconnect = !shuttingDown
+        && code !== DisconnectReason.loggedOut
+        && !shouldResetSession
       current.status = shouldReconnect ? 'reconnecting' : 'disconnected'
       current.lastError = message
       current.qrWaiters.splice(0).forEach((resolve) => resolve(current))
       sessions.delete(sessionKey)
+
+      if (shouldResetSession) {
+        clearStoredSession(sessionKey)
+      } else if (shouldReconnect) {
+        scheduleReconnect(sessionKey, {
+          phone_number: current.phoneNumber,
+          business_name: current.displayName,
+        })
+      }
     }
   })
 
   return current
+}
+
+function scheduleReconnect(sessionKey, meta = {}) {
+  if (shuttingDown || reconnectTimers.has(sessionKey)) return
+
+  const attempt = (reconnectAttempts.get(sessionKey) || 0) + 1
+  reconnectAttempts.set(sessionKey, attempt)
+  const delayMs = Math.min(30000, 1000 * (2 ** Math.min(attempt - 1, 5)))
+
+  const timer = setTimeout(async () => {
+    reconnectTimers.delete(sessionKey)
+    try {
+      await startSocket(sessionKey, meta)
+    } catch (error) {
+      logger.warn({ error, sessionKey, attempt }, 'Could not reconnect WhatsApp session')
+      scheduleReconnect(sessionKey, meta)
+    }
+  }, delayMs)
+
+  reconnectTimers.set(sessionKey, timer)
 }
 
 function waitForQr(session, timeoutMs = 15000) {
@@ -163,6 +217,19 @@ function waitForQr(session, timeoutMs = 15000) {
 
     session.qrWaiters.push(done)
   })
+}
+
+async function startSessionForQr(sessionKey, meta = {}) {
+  let session = await waitForQr(await startSocket(sessionKey, meta))
+
+  // A stored session can fail before emitting a new QR. An explicit QR request
+  // should recover in the same call instead of making the user click again.
+  if (!session.qrImage && ['disconnected', 'reconnecting'].includes(session.status)) {
+    clearStoredSession(sessionKey)
+    session = await waitForQr(await startSocket(sessionKey, meta), 20000)
+  }
+
+  return session
 }
 
 function waitForConnected(session, timeoutMs = 20000) {
@@ -274,34 +341,6 @@ async function resolveRecipientJid(socket, rawTo) {
   return `${candidates[0]}@s.whatsapp.net`
 }
 
-async function sendUrlButton(socket, jid, body, buttonText, url) {
-  const msg = generateWAMessageFromContent(jid, {
-    viewOnceMessage: {
-      message: {
-        interactiveMessage: proto.Message.InteractiveMessage.create({
-          body: proto.Message.InteractiveMessage.Body.create({ text: body }),
-          footer: proto.Message.InteractiveMessage.Footer.create({ text: 'EventPOS' }),
-          nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
-            buttons: [
-              {
-                name: 'cta_url',
-                buttonParamsJson: JSON.stringify({
-                  display_text: buttonText,
-                  url,
-                  merchant_url: url,
-                }),
-              },
-            ],
-          }),
-        }),
-      },
-    },
-  }, {})
-
-  await socket.relayMessage(jid, msg.message, { messageId: msg.key.id })
-  return { key: msg.key, message: msg.message }
-}
-
 function hasStoredSession(sessionKey) {
   return fs.existsSync(sessionPath(sessionKey))
 }
@@ -320,7 +359,7 @@ function publicSession(session) {
 
 app.post('/sessions/start', async (req, res) => {
   try {
-    const session = await waitForQr(await startSocket(req.body.session_key, req.body))
+    const session = await startSessionForQr(req.body.session_key, req.body)
     res.json({ qr: publicSession(session), status: session.status })
   } catch (error) {
     res.status(422).json({ message: error.message })
@@ -329,11 +368,7 @@ app.post('/sessions/start', async (req, res) => {
 
 app.get('/sessions/:sessionKey/qr', async (req, res) => {
   try {
-    let session = await waitForQr(await startSocket(req.params.sessionKey))
-    if (!session.qrImage && session.status === 'disconnected' && session.lastError.includes('Connection Failure')) {
-      clearStoredSession(req.params.sessionKey)
-      session = await waitForQr(await startSocket(req.params.sessionKey))
-    }
+    const session = await startSessionForQr(req.params.sessionKey)
     res.json(publicSession(session))
   } catch (error) {
     res.status(422).json({ message: error.message })
@@ -350,23 +385,25 @@ app.get('/sessions/:sessionKey/status', async (req, res) => {
   }
 })
 
-app.get('/debug/resolve/:sessionKey/:to', async (req, res) => {
-  try {
-    const session = await waitForConnected(await startSocket(req.params.sessionKey))
-    if (session.status !== 'connected' || !session.socket) {
-      return res.status(422).json({ message: 'La sesión de WhatsApp no está conectada.' })
-    }
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/debug/resolve/:sessionKey/:to', async (req, res) => {
+    try {
+      const session = await waitForConnected(await startSocket(req.params.sessionKey))
+      if (session.status !== 'connected' || !session.socket) {
+        return res.status(422).json({ message: 'La sesión de WhatsApp no está conectada.' })
+      }
 
-    const candidates = recipientCandidates(req.params.to)
-    const checks = candidates.length
-      ? await withTimeout(session.socket.onWhatsApp(...candidates), 10000, 'No se pudo validar el número en WhatsApp.')
-      : []
-    const resolved = await resolveRecipientJid(session.socket, req.params.to)
-    res.json({ candidates, checks, resolved })
-  } catch (error) {
-    res.status(422).json({ message: error.message })
-  }
-})
+      const candidates = recipientCandidates(req.params.to)
+      const checks = candidates.length
+        ? await withTimeout(session.socket.onWhatsApp(...candidates), 10000, 'No se pudo validar el número en WhatsApp.')
+        : []
+      const resolved = await resolveRecipientJid(session.socket, req.params.to)
+      res.json({ candidates, checks, resolved })
+    } catch (error) {
+      res.status(422).json({ message: error.message })
+    }
+  })
+}
 
 app.post('/messages/send', async (req, res) => {
   try {
@@ -391,21 +428,23 @@ app.post('/messages/send', async (req, res) => {
     let sentType = 'text'
 
     if (type === 'button_url' && req.body.url && req.body.button_text) {
-      try {
-        response = await withTimeout(
-          sendUrlButton(session.socket, jid, message, String(req.body.button_text), String(req.body.url)),
-          45000,
-          'WhatsApp tardó demasiado en confirmar el envío. Revisa el estado de la sesión e intenta de nuevo.'
-        )
-        sentType = 'button_url'
-      } catch (error) {
-        logger.warn({ error }, 'URL button failed, falling back to text link')
-        response = await withTimeout(
-          session.socket.sendMessage(jid, { text: `${message}\n\n${req.body.button_text}: ${req.body.url}` }),
-          45000,
-          'WhatsApp tardó demasiado en confirmar el envío. Revisa el estado de la sesión e intenta de nuevo.'
-        )
-      }
+      const url = String(req.body.url)
+      const buttonText = String(req.body.button_text)
+      const text = `${message}\n${url}`
+      response = await withTimeout(
+        session.socket.sendMessage(jid, {
+          text,
+          linkPreview: {
+            'canonical-url': url,
+            'matched-text': url,
+            title: buttonText,
+            description: 'Toca para abrir el documento',
+          },
+        }),
+        45000,
+        'WhatsApp tardó demasiado en confirmar el envío. Revisa el estado de la sesión e intenta de nuevo.'
+      )
+      sentType = 'text_link'
     } else {
       response = await withTimeout(
         session.socket.sendMessage(jid, { text: message }),
@@ -431,17 +470,43 @@ app.post('/messages/send', async (req, res) => {
 
 app.post('/sessions/:sessionKey/logout', async (req, res) => {
   try {
+    assertSessionKey(req.params.sessionKey)
     const session = sessions.get(req.params.sessionKey)
     if (session?.socket) {
       await session.socket.logout()
     }
-    sessions.delete(req.params.sessionKey)
+    clearStoredSession(req.params.sessionKey)
     res.json({ status: 'disconnected' })
   } catch (error) {
     res.status(422).json({ message: error.message })
   }
 })
 
-app.listen(port, host, () => {
+const server = app.listen(port, host, () => {
   logger.info(`EventPOS Baileys service listening on ${host}:${port}`)
 })
+
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  logger.info({ signal }, 'Shutting down Baileys service')
+
+  reconnectTimers.forEach((timer) => clearTimeout(timer))
+  reconnectTimers.clear()
+  messageWaiters.forEach((waiter) => clearTimeout(waiter.timer))
+  messageWaiters.clear()
+
+  sessions.forEach((session) => {
+    try {
+      session.socket?.end(new Error('Service shutting down'))
+    } catch (error) {
+      logger.warn({ error, sessionKey: session.key }, 'Could not close WhatsApp socket cleanly')
+    }
+  })
+
+  server.close(() => process.exit(0))
+  setTimeout(() => process.exit(1), 10000).unref()
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

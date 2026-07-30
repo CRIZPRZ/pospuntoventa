@@ -43,16 +43,21 @@ class BaileysWhatsAppService
         ]));
     }
 
-    public function sendUrlButtonMessage(WhatsAppConfig $config, string $to, string $message, string $buttonText, string $url): array
-    {
+    public function sendUrlMessage(
+        WhatsAppConfig $config,
+        string $to,
+        string $message,
+        string $url,
+        string $buttonText
+    ): array {
         return $this->ensureMessageConfirmed($this->request('post', '/messages/send', [
             'tenant_id' => (string) $config->empresa_id,
             'session_key' => $config->session_key,
             'to' => $this->normalizePhone($to),
             'message' => $message,
-            'button_text' => $buttonText,
-            'url' => $url,
             'type' => 'button_url',
+            'url' => $url,
+            'button_text' => $buttonText,
         ]));
     }
 
@@ -63,11 +68,15 @@ class BaileysWhatsAppService
             throw new \RuntimeException('Falta configurar WHATSAPP_BAILEYS_URL.');
         }
 
-        $client = Http::acceptJson()->timeout(60);
         $token = (string) config('services.whatsapp.baileys_token', '');
-        if ($token !== '') {
-            $client = $client->withToken($token);
+        if ($token === '') {
+            throw new \RuntimeException('Falta configurar WHATSAPP_BAILEYS_TOKEN.');
         }
+
+        $client = Http::acceptJson()
+            ->withToken($token)
+            ->connectTimeout(5)
+            ->timeout(60);
 
         $response = $method === 'get'
             ? $client->get($baseUrl . $path, $payload)

@@ -1,0 +1,30 @@
+services:
+  baileys:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3025
+      SESSIONS_DIR: /app/sessions
+    ports:
+      - "127.0.0.1:${BAILEYS_PORT:-3025}:3025"
+    volumes:
+      - baileys-sessions:/app/sessions
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3025/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  baileys-sessions:

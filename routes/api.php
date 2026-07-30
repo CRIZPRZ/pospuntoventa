@@ -101,7 +101,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('clientes', [ClienteController::class, 'store']);
         Route::put('clientes/{cliente}', [ClienteController::class, 'update']);
         Route::delete('clientes/{cliente}', [ClienteController::class, 'destroy']);
-        Route::post('clientes/{cliente}/recordar-pago-whatsapp', [ClienteController::class, 'recordarPagoWhatsApp']);
+        Route::post('clientes/{cliente}/recordar-pago-whatsapp', [ClienteController::class, 'recordarPagoWhatsApp'])
+            ->middleware(['module:whatsapp', 'throttle:whatsapp']);
     });
 
     // Abonos
@@ -118,7 +119,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::get('ventas/{venta}', [VentaController::class, 'show']);
         Route::get('ventas/{venta}/ticket', [VentaController::class, 'ticket']);
         Route::post('ventas/{venta}/imprimir-termico', [VentaController::class, 'imprimirTermico']);
-        Route::post('ventas/{venta}/enviar-whatsapp', [VentaController::class, 'enviarWhatsApp']);
+        Route::post('ventas/{venta}/enviar-whatsapp', [VentaController::class, 'enviarWhatsApp'])
+            ->middleware(['module:whatsapp', 'throttle:whatsapp']);
      });
     Route::middleware('can:realizar ventas')->group(function () {
         Route::post('ventas', [VentaController::class, 'store']);
@@ -198,6 +200,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('configuracion/logo', [ConfiguracionController::class, 'uploadLogo']);
         Route::delete('configuracion/logo', [ConfiguracionController::class, 'deleteLogo']);
         Route::post('configuracion/test-correo', [ConfiguracionController::class, 'testCorreo']);
+    });
+    Route::middleware(['can:gestionar configuracion', 'module:whatsapp', 'throttle:whatsapp'])->group(function () {
         Route::post('whatsapp/connect', [WhatsAppController::class, 'connect']);
         Route::post('whatsapp/complete', [WhatsAppController::class, 'complete']);
         Route::get('whatsapp/qr', [WhatsAppController::class, 'qr']);
@@ -219,7 +223,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('cotizaciones/{cotizacion}/convertir', [CotizacionController::class, 'convertir']);
         Route::post('cotizaciones/{cotizacion}/convertir-pedido', [CotizacionController::class, 'convertirAPedido']);
         Route::post('cotizaciones/{cotizacion}/enviar', [CotizacionController::class, 'enviar']);
-        Route::post('cotizaciones/{cotizacion}/enviar-whatsapp', [CotizacionController::class, 'enviarWhatsApp']);
+        Route::post('cotizaciones/{cotizacion}/enviar-whatsapp', [CotizacionController::class, 'enviarWhatsApp'])
+            ->middleware(['module:whatsapp', 'throttle:whatsapp']);
     });
 
     // Pedidos
@@ -234,8 +239,10 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::delete('pedidos/{pedido}', [PedidoController::class, 'destroy']);
         Route::post('pedidos/{pedido}/enviar', [PedidoController::class, 'enviar']);
         Route::post('pedidos/{pedido}/recordar', [PedidoController::class, 'recordar']);
-        Route::post('pedidos/{pedido}/enviar-whatsapp', [PedidoController::class, 'enviarWhatsApp']);
-        Route::post('pedidos/{pedido}/recordar-whatsapp', [PedidoController::class, 'recordarWhatsApp']);
+        Route::post('pedidos/{pedido}/enviar-whatsapp', [PedidoController::class, 'enviarWhatsApp'])
+            ->middleware(['module:whatsapp', 'throttle:whatsapp']);
+        Route::post('pedidos/{pedido}/recordar-whatsapp', [PedidoController::class, 'recordarWhatsApp'])
+            ->middleware(['module:whatsapp', 'throttle:whatsapp']);
     });
 
     // Sucursales
@@ -302,7 +309,8 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::post('ventas/{venta}/facturar',        [FacturacionController::class, 'facturar']);
         Route::post('ventas/{venta}/cfdi/cancelar',   [FacturacionController::class, 'cancelarCfdi']);
         Route::post('ventas/{venta}/cfdi/reenviar',   [FacturacionController::class, 'reenviarEmail']);
-        Route::post('ventas/{venta}/cfdi/whatsapp',   [FacturacionController::class, 'enviarCfdiWhatsApp']);
+        Route::post('ventas/{venta}/cfdi/whatsapp',   [FacturacionController::class, 'enviarCfdiWhatsApp'])
+            ->middleware(['module:whatsapp', 'throttle:whatsapp']);
     });
     Route::middleware('can:ver facturacion')->group(function () {
         Route::get('ventas/{venta}/cfdi/xml',       [FacturacionController::class, 'downloadXml']);

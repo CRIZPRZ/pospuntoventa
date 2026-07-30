@@ -17,7 +17,7 @@ use Spatie\Permission\Models\Role;
 
 class RegisterController extends Controller
 {
-    // Módulos que se habilitan en trial sin plan seleccionado
+    // Módulos que se habilitan durante el trial.
     private const MODULOS_TRIAL = [
         'dashboard', 'pos', 'ventas', 'caja', 'cortes',
         'productos', 'categorias', 'clientes', 'abonos',
@@ -32,9 +32,22 @@ class RegisterController extends Controller
             'empresa_nombre' => ['required', 'string', 'max:255'],
             'email'          => ['required', 'email', 'max:255', 'unique:users,email'],
             'password'       => ['required', 'string', 'min:8', 'confirmed'],
-            'plan_id'        => ['nullable', 'integer'],
             'website'        => ['nullable', 'max:0'],
             'flow_started_at'=> ['nullable', 'integer'],
+        ], [
+            'empresa_nombre.required' => 'Escribe el nombre de tu empresa.',
+            'empresa_nombre.string'   => 'El nombre de la empresa no es válido.',
+            'empresa_nombre.max'      => 'El nombre de la empresa no puede exceder 255 caracteres.',
+            'email.required'          => 'Escribe tu correo electrónico.',
+            'email.email'             => 'Ingresa un correo electrónico válido.',
+            'email.max'               => 'El correo electrónico no puede exceder 255 caracteres.',
+            'email.unique'            => 'Este correo ya está registrado.',
+            'password.required'       => 'Escribe una contraseña.',
+            'password.string'         => 'La contraseña no es válida.',
+            'password.min'            => 'La contraseña debe tener al menos 8 caracteres.',
+            'password.confirmed'      => 'Las contraseñas no coinciden.',
+            'website.max'             => 'No se pudo procesar el registro.',
+            'flow_started_at.integer' => 'No se pudo procesar el registro.',
         ]);
 
         if (! empty($data['website'])) {
@@ -63,8 +76,7 @@ class RegisterController extends Controller
             'plan_vigente_hasta' => now()->addDays(14),
         ]);
 
-        // Trial siempre usa los módulos propios del trial.
-        // La selección de plan en registro es solo intención comercial hasta pagar.
+        // El registro siempre inicia en trial; la contratación ocurre después.
         $modulosActivos = self::MODULOS_TRIAL;
         foreach ($modulosActivos as $key) {
             $empresa->modulos()->create(['modulo_key' => $key, 'activo' => true]);

@@ -1,0 +1,13 @@
+[program:eventpos-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=/usr/bin/php /var/www/eventpos/artisan queue:work redis --sleep=3 --tries=3 --timeout=120 --max-time=3600
+directory=/var/www/eventpos
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=www-data
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/var/log/supervisor/eventpos-worker.log
+stopwaitsecs=3600

@@ -14,6 +14,7 @@ use App\Models\VentaItem;
 use App\Services\WhatsAppService;
 use App\Traits\EnviaCorreosTrait;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class CotizacionController extends Controller
 {
@@ -22,7 +23,7 @@ class CotizacionController extends Controller
     public function index(Request $request)
     {
         $query = $this->applySucursalScope(
-            Cotizacion::with(['cliente:id,nombre', 'vendedor:id,name', 'items'])->latest()
+            Cotizacion::with(['cliente:id,nombre,email,telefono', 'vendedor:id,name', 'items'])->latest()
         );
 
         if ($request->filled('q')) {
@@ -151,6 +152,16 @@ class CotizacionController extends Controller
             'items.*.descuento'         => 'nullable|numeric|min:0|max:100',
         ]);
 
+        $nextStatus = $data['status'] ?? $cotizacion->status;
+        if ($cotizacion->status === 'aceptada' && $nextStatus !== 'aceptada') {
+            return response()->json([
+                'message' => 'Una cotización aceptada no puede reabrirse porque ya generó un pedido.',
+            ], 422);
+        }
+
+        $isReopening = in_array($cotizacion->status, ['rechazada', 'vencida'], true)
+            && in_array($nextStatus, ['borrador', 'enviada'], true);
+
         $cotizacion->update(array_filter([
             'cliente_id'       => $data['cliente_id'] ?? $cotizacion->cliente_id,
             'nombre_cliente'   => $data['nombre_cliente'] ?? $cotizacion->nombre_cliente,
@@ -159,7 +170,8 @@ class CotizacionController extends Controller
             'vendedor_id'      => $data['vendedor_id'] ?? $cotizacion->vendedor_id,
             'fecha'            => $data['fecha'] ?? $cotizacion->fecha,
             'fecha_vencimiento' => array_key_exists('fecha_vencimiento', $data) ? $data['fecha_vencimiento'] : $cotizacion->fecha_vencimiento,
-            'status'           => $data['status'] ?? $cotizacion->status,
+            'status'           => $nextStatus,
+            'ticket_token'     => $isReopening ? Str::random(48) : $cotizacion->ticket_token,
             'descuento'        => $data['descuento'] ?? $cotizacion->descuento,
             'impuesto_pct'     => $data['impuesto_pct'] ?? $cotizacion->impuesto_pct,
             'notas'            => array_key_exists('notas', $data) ? $data['notas'] : $cotizacion->notas,
@@ -516,15 +528,26 @@ class CotizacionController extends Controller
 
         $telefono = null;
         if (!empty($data['cliente_id'])) {
-            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
-            $telefono = $cliente?->telefono;
-            if (!$cotizacion->cliente_id) {
-                $cotizacion->update(['cliente_id' => $data['cliente_id']]);
+            $cliente = Cliente::query()->find($data['cliente_id']);
+            if (!$cliente) {
+                return response()->json(['message' => 'El cliente no pertenece a tu empresa.'], 422);
             }
+            $telefono = !empty($data['telefono']) ? $data['telefono'] : $cliente?->telefono;
+            if (!empty($data['telefono'])) {
+                $cliente->update(['telefono' => $telefono]);
+            }
+            $cotizacion->update([
+                'cliente_id' => $cliente->id,
+                'telefono_cliente' => $telefono,
+            ]);
         } elseif (!empty($data['telefono'])) {
             $telefono = $data['telefono'];
-            // Always persist the provided phone so future resends use the corrected number
             $cotizacion->update(['telefono_cliente' => $telefono]);
+            if ($cotizacion->cliente_id) {
+                Cliente::query()
+                    ->where('id', $cotizacion->cliente_id)
+                    ->update(['telefono' => $telefono]);
+            }
         }
 
         if (!$telefono) {
@@ -533,6 +556,11 @@ class CotizacionController extends Controller
 
         $svc = app(WhatsAppService::class);
         $sucursalId = $cotizacion->sucursal_id ? (int) $cotizacion->sucursal_id : null;
+
+        if (!$svc->isFeatureEnabled((int) $cotizacion->empresa_id, $sucursalId, 'auto_send_quote')) {
+            return response()->json(['message' => 'El envío de cotizaciones por WhatsApp está desactivado en Configuración.'], 422);
+        }
+
         $publicConfig = $svc->resolvePublicConfig((int) $cotizacion->empresa_id, $sucursalId);
         $technicalConfig = $svc->resolveTechnicalConfig((int) $cotizacion->empresa_id, $sucursalId);
 
@@ -562,7 +590,7 @@ class CotizacionController extends Controller
         ]);
 
         $ticketUrl = $cotizacion->ticket_token
-            ? url('/t/cotizacion/' . $cotizacion->ticket_token)
+            ? WhatsAppService::publicUrl('/t/cotizacion/' . $cotizacion->ticket_token)
             : null;
 
         try {

@@ -18,7 +18,7 @@ class PedidoController extends Controller
     public function index(Request $request)
     {
         $query = $this->applySucursalScope(
-            Pedido::with(['cliente:id,nombre', 'vendedor:id,name', 'cotizacion:id,folio'])->latest()
+            Pedido::with(['cliente:id,nombre,email,telefono', 'vendedor:id,name', 'cotizacion:id,folio'])->latest()
         );
 
         if ($request->filled('q')) {
@@ -228,11 +228,14 @@ class PedidoController extends Controller
 
         $telefono = null;
         if (!empty($data['cliente_id'])) {
-            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            $cliente = Cliente::query()->find($data['cliente_id']);
+            if (!$cliente) {
+                return response()->json(['message' => 'El cliente no pertenece a tu empresa.'], 422);
+            }
             // Use explicitly provided phone; fallback to stored client phone
             $telefono = !empty($data['telefono']) ? $data['telefono'] : $cliente?->telefono;
             if (!$pedido->cliente_id) {
-                $pedido->update(['cliente_id' => $data['cliente_id']]);
+                $pedido->update(['cliente_id' => $cliente->id]);
             }
             // Always persist the corrected phone on the client
             if (!empty($data['telefono']) && $cliente) {
@@ -241,7 +244,7 @@ class PedidoController extends Controller
         } elseif (!empty($data['telefono'])) {
             $telefono = $data['telefono'];
             if ($pedido->cliente_id) {
-                Cliente::withoutGlobalScopes()
+                Cliente::query()
                     ->where('id', $pedido->cliente_id)
                     ->update(['telefono' => $telefono]);
             }
@@ -253,6 +256,11 @@ class PedidoController extends Controller
 
         $svc = app(WhatsAppService::class);
         $sucursalId = $pedido->sucursal_id ? (int) $pedido->sucursal_id : null;
+
+        if (!$svc->isFeatureEnabled((int) $pedido->empresa_id, $sucursalId, 'auto_send_order_ready')) {
+            return response()->json(['message' => 'El envío de pedidos por WhatsApp está desactivado en Configuración.'], 422);
+        }
+
         $publicConfig = $svc->resolvePublicConfig((int) $pedido->empresa_id, $sucursalId);
         $technicalConfig = $svc->resolveTechnicalConfig((int) $pedido->empresa_id, $sucursalId);
 
@@ -287,7 +295,7 @@ class PedidoController extends Controller
         ]));
 
         $ticketUrl = $pedido->ticket_token
-            ? url('/t/pedido/' . $pedido->ticket_token)
+            ? WhatsAppService::publicUrl('/t/pedido/' . $pedido->ticket_token)
             : null;
 
         try {
@@ -312,7 +320,10 @@ class PedidoController extends Controller
 
         $telefono = null;
         if (!empty($data['cliente_id'])) {
-            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+            $cliente = Cliente::query()->find($data['cliente_id']);
+            if (!$cliente) {
+                return response()->json(['message' => 'El cliente no pertenece a tu empresa.'], 422);
+            }
             $telefono = !empty($data['telefono']) ? $data['telefono'] : $cliente?->telefono;
             if (!empty($data['telefono']) && $cliente) {
                 $cliente->update(['telefono' => $data['telefono']]);
@@ -327,6 +338,11 @@ class PedidoController extends Controller
 
         $svc = app(WhatsAppService::class);
         $sucursalId = $pedido->sucursal_id ? (int) $pedido->sucursal_id : null;
+
+        if (!$svc->isFeatureEnabled((int) $pedido->empresa_id, $sucursalId, 'auto_send_order_ready')) {
+            return response()->json(['message' => 'Los avisos de pedidos por WhatsApp están desactivados en Configuración.'], 422);
+        }
+
         $publicConfig = $svc->resolvePublicConfig((int) $pedido->empresa_id, $sucursalId);
         $technicalConfig = $svc->resolveTechnicalConfig((int) $pedido->empresa_id, $sucursalId);
 
@@ -350,7 +366,7 @@ class PedidoController extends Controller
         ]));
 
         $ticketUrl = $pedido->ticket_token
-            ? url('/t/pedido/' . $pedido->ticket_token)
+            ? WhatsAppService::publicUrl('/t/pedido/' . $pedido->ticket_token)
             : null;
 
         try {

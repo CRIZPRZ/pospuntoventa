@@ -424,7 +424,7 @@ class ConfiguracionController extends Controller
             'test_phone_number' => '',
             'last_test_at' => '',
             'last_error' => '',
-            'auto_send_ticket' => true,
+            'auto_send_ticket' => false,
             'auto_send_quote' => false,
             'auto_send_order_ready' => false,
             'auto_send_invoice' => false,

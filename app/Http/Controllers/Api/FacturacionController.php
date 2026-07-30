@@ -779,11 +779,29 @@ class FacturacionController extends Controller
         }
 
         $telefono = null;
+        $cliente = null;
+
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::query()->find($data['cliente_id']);
+            if (!$cliente) {
+                return response()->json(['message' => 'El cliente no pertenece a tu empresa.'], 422);
+            }
+        }
+
         if (!empty($data['telefono'])) {
             $telefono = $data['telefono'];
-        } elseif (!empty($data['cliente_id'])) {
-            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+        } elseif ($cliente) {
             $telefono = $cliente?->telefono;
+        }
+
+        if (!empty($data['telefono'])) {
+            if ($cliente) {
+                $cliente->update(['telefono' => $telefono]);
+            } elseif ($venta->cliente_id) {
+                Cliente::query()
+                    ->where('id', $venta->cliente_id)
+                    ->update(['telefono' => $telefono]);
+            }
         }
 
         if (!$telefono) {
@@ -792,6 +810,11 @@ class FacturacionController extends Controller
 
         $svc         = app(WhatsAppService::class);
         $sucursalId  = $venta->sucursal_id ? (int) $venta->sucursal_id : null;
+
+        if (!$svc->isFeatureEnabled((int) $venta->empresa_id, $sucursalId, 'auto_send_invoice')) {
+            return response()->json(['message' => 'El envío de facturas por WhatsApp está desactivado en Configuración.'], 422);
+        }
+
         $publicCfg   = $svc->resolvePublicConfig((int) $venta->empresa_id, $sucursalId);
         $technicalCfg = $svc->resolveTechnicalConfig((int) $venta->empresa_id, $sucursalId);
 
@@ -804,8 +827,7 @@ class FacturacionController extends Controller
         $emisorNombre = $cfg['empresa']['nombre'] ?? ($technicalCfg->business_name ?? 'Tu negocio');
         $emisorRfc    = $cfg['empresa']['rfc'] ?? '';
 
-        $baseUrl = rtrim(config('app.url'), '/');
-        $zipUrl  = "{$baseUrl}/api/cfdi/{$venta->cfdi_uuid}/zip";
+        $zipUrl = WhatsAppService::publicUrl("/api/cfdi/{$venta->cfdi_uuid}/zip");
 
         $body = implode("\n", [
             "🧾 *Factura electrónica*",

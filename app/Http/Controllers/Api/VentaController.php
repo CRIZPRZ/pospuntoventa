@@ -11,9 +11,9 @@ use App\Http\Controllers\Api\Concerns\ScopesBySucursal;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Events\VentaCompletada;
-use App\Listeners\SendVentaTicketToWhatsApp;
 use App\Models\WhatsAppConfig;
 use App\Services\WhatsAppService;
+use App\Services\VentaTicketWhatsAppMessage;
 use Illuminate\Validation\Rule;
 
 class VentaController extends Controller
@@ -230,12 +230,29 @@ class VentaController extends Controller
         $venta->load(['items']);
 
         $telefono = null;
+        $cliente = null;
+
+        if (!empty($data['cliente_id'])) {
+            $cliente = Cliente::query()->find($data['cliente_id']);
+            if (!$cliente) {
+                return response()->json(['message' => 'El cliente no pertenece a tu empresa.'], 422);
+            }
+        }
 
         if (!empty($data['telefono'])) {
             $telefono = $data['telefono'];
-        } elseif (!empty($data['cliente_id'])) {
-            $cliente = Cliente::withoutGlobalScopes()->find($data['cliente_id']);
+        } elseif ($cliente) {
             $telefono = $cliente?->telefono;
+        }
+
+        if (!empty($data['telefono'])) {
+            if ($cliente) {
+                $cliente->update(['telefono' => $telefono]);
+            } elseif ($venta->cliente_id) {
+                Cliente::query()
+                    ->where('id', $venta->cliente_id)
+                    ->update(['telefono' => $telefono]);
+            }
         }
 
         if (!$telefono) {
@@ -248,6 +265,10 @@ class VentaController extends Controller
 
         $svc = app(WhatsAppService::class);
         $sucursalId = $venta->sucursal_id ? (int) $venta->sucursal_id : null;
+
+        if (!$svc->isFeatureEnabled((int) $venta->empresa_id, $sucursalId, 'auto_send_ticket')) {
+            return response()->json(['message' => 'El envío de tickets por WhatsApp está desactivado en Configuración.'], 422);
+        }
 
         $publicConfig = $svc->resolvePublicConfig((int) $venta->empresa_id, $sucursalId);
         $technicalConfig = $svc->resolveTechnicalConfig((int) $venta->empresa_id, $sucursalId);
@@ -262,7 +283,7 @@ class VentaController extends Controller
 
         $businessName = $svc->resolveBusinessName((int) $venta->empresa_id, $sucursalId, $technicalConfig, $publicConfig);
 
-        [$body, $ticketUrl] = SendVentaTicketToWhatsApp::buildTicketContent($venta, $businessName);
+        [$body, $ticketUrl] = VentaTicketWhatsAppMessage::build($venta, $businessName);
 
         try {
             if ($ticketUrl) {
@@ -275,8 +296,8 @@ class VentaController extends Controller
         }
 
         // Link client to sale if not already linked
-        if (!empty($data['cliente_id']) && !$venta->cliente_id) {
-            $venta->update(['cliente_id' => $data['cliente_id']]);
+        if ($cliente && !$venta->cliente_id) {
+            $venta->update(['cliente_id' => $cliente->id]);
         }
 
         return response()->json([

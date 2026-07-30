@@ -114,11 +114,13 @@ class WhatsAppService
     public function sendTicketMessage(WhatsAppConfig $config, string $to, string $body, string $ticketUrl, string $buttonText = 'Ver ticket completo'): array
     {
         if ($this->usesBaileys($config)) {
-            try {
-                return app(BaileysWhatsAppService::class)->sendUrlButtonMessage($config, $to, $body, $buttonText, $ticketUrl);
-            } catch (\Throwable) {
-                return $this->sendTextMessage($config, $to, $body . "\n\n" . $buttonText . ': ' . $ticketUrl);
-            }
+            return app(BaileysWhatsAppService::class)->sendUrlMessage(
+                $config,
+                $to,
+                $body . "\n\n🔗 *Haz clic aquí para {$this->linkAction($buttonText)}:*",
+                $ticketUrl,
+                $buttonText,
+            );
         }
 
         if (!$config->access_token || !$config->phone_number_id) {
@@ -150,6 +152,26 @@ class WhatsAppService
         }
 
         return $response->json();
+    }
+
+    public static function publicUrl(string $path): string
+    {
+        $baseUrl = rtrim(
+            (string) (config('services.whatsapp.public_url') ?: config('app.url')),
+            '/',
+        );
+
+        return $baseUrl . '/' . ltrim($path, '/');
+    }
+
+    private function linkAction(string $buttonText): string
+    {
+        return match ($buttonText) {
+            'Ver ticket completo' => 'ver tu ticket',
+            'Ver cotización' => 'ver tu cotización',
+            'Ver pedido completo' => 'ver tu pedido',
+            default => lcfirst(trim($buttonText)),
+        };
     }
 
     public function sendCfdiMessage(WhatsAppConfig $config, string $to, string $body, string $pdfUrl, string $xmlUrl): void
@@ -212,6 +234,16 @@ class WhatsAppService
 
     public function resolveBusinessName(int $empresaId, ?int $sucursalId, WhatsAppConfig $technicalConfig, array $publicConfig = []): string
     {
+        $configuredName = $this->resolveConfiguredBusinessName($empresaId, $sucursalId);
+
+        return $configuredName
+            ?: $technicalConfig->display_name
+            ?: $technicalConfig->business_name
+            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+    }
+
+    public function resolveConfiguredBusinessName(int $empresaId, ?int $sucursalId): string
+    {
         $sucursalCfg = $sucursalId
             ? (ConfiguracionSucursal::where('empresa_id', $empresaId)
                 ->where('sucursal_id', $sucursalId)
@@ -221,11 +253,12 @@ class WhatsAppService
         $empresaCfg = Configuracion::where('empresa_id', $empresaId)
             ->first()?->config ?? [];
 
-        return ($sucursalCfg['nombre_comercial'] ?? null)
+        return trim((string) (
+            ($sucursalCfg['nombre_comercial'] ?? null)
+            ?: ($empresaCfg['nombre_comercial'] ?? null)
             ?: ($empresaCfg['empresa']['nombre'] ?? null)
-            ?: $technicalConfig->display_name
-            ?: $technicalConfig->business_name
-            ?: ($publicConfig['business_name'] ?? 'Tu negocio');
+            ?: ''
+        ));
     }
 
     public function resolveTechnicalConfig(int $empresaId, ?int $sucursalId = null): ?WhatsAppConfig
@@ -315,6 +348,23 @@ class WhatsAppService
         return array_replace_recursive($empresaPublic, $sucursalPublic);
     }
 
+    public function isFeatureEnabled(int $empresaId, ?int $sucursalId, string $feature): bool
+    {
+        $allowedFeatures = [
+            'auto_send_ticket',
+            'auto_send_quote',
+            'auto_send_order_ready',
+            'auto_send_invoice',
+            'auto_send_payment_reminder',
+        ];
+
+        if (!in_array($feature, $allowedFeatures, true)) {
+            return false;
+        }
+
+        return ($this->resolvePublicConfig($empresaId, $sucursalId)[$feature] ?? false) === true;
+    }
+
     private function messagesUrl(string $phoneNumberId): string
     {
         $version = config('services.whatsapp.api_version', 'v23.0');
@@ -381,7 +431,7 @@ class WhatsAppService
             'test_phone_number' => '',
             'last_test_at' => '',
             'last_error' => '',
-            'auto_send_ticket' => true,
+            'auto_send_ticket' => false,
             'auto_send_quote' => false,
             'auto_send_order_ready' => false,
             'auto_send_invoice' => false,

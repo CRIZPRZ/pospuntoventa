@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\CheckTrial;
+use App\Http\Middleware\EnsureModuleEnabled;
 use App\Http\Middleware\ResolveSucursal;
 use App\Http\Middleware\ResolveTenant;
 use App\Http\Middleware\SuperAdminMiddleware;
@@ -24,6 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'superadmin'  => SuperAdminMiddleware::class,
             'check.trial' => CheckTrial::class,
+            'module'      => EnsureModuleEnabled::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

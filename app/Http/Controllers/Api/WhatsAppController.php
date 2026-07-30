@@ -33,11 +33,6 @@ class WhatsAppController extends Controller
             'phone_number_id' => ['nullable', 'string', 'max:100'],
             'whatsapp_business_account_id' => ['nullable', 'string', 'max:100'],
             'access_token' => ['nullable', 'string'],
-            'auto_send_ticket' => ['nullable', 'boolean'],
-            'auto_send_quote' => ['nullable', 'boolean'],
-            'auto_send_order_ready' => ['nullable', 'boolean'],
-            'auto_send_invoice' => ['nullable', 'boolean'],
-            'auto_send_payment_reminder' => ['nullable', 'boolean'],
         ]);
 
         $scope = $this->scope($data);
@@ -473,7 +468,7 @@ class WhatsAppController extends Controller
             'test_phone_number' => '',
             'last_test_at' => '',
             'last_error' => '',
-            'auto_send_ticket' => true,
+            'auto_send_ticket' => false,
             'auto_send_quote' => false,
             'auto_send_order_ready' => false,
             'auto_send_invoice' => false,
@@ -560,11 +555,38 @@ class WhatsAppController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
+        $qr = $payload['qr'] ?? $payload;
+        $hasQr = !empty($qr['image'] ?? null)
+            || !empty($qr['qr_image'] ?? null)
+            || !empty($qr['code'] ?? null)
+            || !empty($qr['qr'] ?? null);
+        $status = $qr['status'] ?? $payload['status'] ?? ($hasQr ? 'qr_pending' : 'disconnected');
+        $lastError = $qr['last_error'] ?? null;
+
+        $config->update([
+            'status' => $status,
+            'last_error' => $lastError,
+        ]);
+        $this->savePublicConfig([
+            'provider' => 'baileys',
+            'status' => $status,
+            'last_error' => $lastError ?: '',
+        ], $scope);
+
+        if (!$hasQr && $status !== 'connected') {
+            return response()->json([
+                'message' => $lastError ?: 'WhatsApp no pudo generar el QR. Intenta nuevamente en unos segundos.',
+                'status' => $status,
+            ], 422);
+        }
+
         return response()->json([
-            'message' => 'QR generado. Escanea WhatsApp Web para terminar la conexión.',
-            'status' => 'qr_pending',
+            'message' => $status === 'connected'
+                ? 'WhatsApp ya está conectado.'
+                : 'QR generado. Escanea WhatsApp Web para terminar la conexión.',
+            'status' => $status,
             'scope' => $scope,
-            'qr' => $payload['qr'] ?? $payload,
+            'qr' => $qr,
         ]);
     }
 
