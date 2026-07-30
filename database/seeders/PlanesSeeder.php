@@ -3,7 +3,9 @@
 namespace Database\Seeders;
 
 use App\Models\Plan;
+use App\Models\Empresa;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 
 class PlanesSeeder extends Seeder
 {
@@ -44,7 +46,7 @@ class PlanesSeeder extends Seeder
                     'cotizaciones', 'pedidos', 'reportes',
                     'proveedores', 'pagos_proveedores',
                     'usuarios', 'roles', 'sucursales', 'configuracion',
-                    'mercado_libre', 'facturacion',
+                    'mercado_libre', 'facturacion', 'whatsapp',
                 ],
             ],
             [
@@ -63,7 +65,7 @@ class PlanesSeeder extends Seeder
                     'cotizaciones', 'pedidos', 'reportes',
                     'proveedores', 'pagos_proveedores',
                     'usuarios', 'roles', 'sucursales', 'configuracion',
-                    'mercado_libre', 'facturacion',
+                    'mercado_libre', 'facturacion', 'whatsapp',
                 ],
             ],
         ];
@@ -75,6 +77,32 @@ class PlanesSeeder extends Seeder
                 $plan
             );
         }
+
+        // Cámaras permanece fuera de todos los planes y trials hasta su lanzamiento.
+        DB::table('empresa_modulos')
+            ->where('modulo_key', 'camaras')
+            ->update(['activo' => false, 'updated_at' => now()]);
+
+        // Aplicar la definición vigente a tenants con planes comerciales activos.
+        Empresa::query()
+            ->with('plan')
+            ->where('plan_estado', 'activo')
+            ->whereNotNull('plan_id')
+            ->chunkById(100, function ($empresas) {
+                foreach ($empresas as $empresa) {
+                    if (!$empresa->plan || $empresa->plan->tipo === 'manual') {
+                        continue;
+                    }
+
+                    $empresa->modulos()->update(['activo' => false]);
+                    foreach ($empresa->plan->modulos ?? [] as $key) {
+                        $empresa->modulos()->updateOrCreate(
+                            ['modulo_key' => $key],
+                            ['activo' => true],
+                        );
+                    }
+                }
+            });
 
         $this->command->info('✓ Planes sincronizados: Básico, Pro, Ilimitado');
     }

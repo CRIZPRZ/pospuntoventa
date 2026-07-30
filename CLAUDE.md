@@ -196,6 +196,7 @@ POST   /cortes/{id}/imprimir-termico   ← PENDIENTE IMPLEMENTAR (frontend ya lo
 - **Estado real Baileys al enviar (2026-07-03)**: `WhatsAppService::isConnected()` no debe confiar solo en `whatsapp_configs.status` para Baileys. Siempre consulta `whatsapp-baileys /status`, actualiza `whatsapp_configs`, sincroniza `config.whatsapp` y limpia cache (`ventas_configuracion_*`, `ventas_config_sucursal_*`). Así el POS no muestra/enruta como conectado una sesión caída con `Connection Failure`.
 - **Docker local Baileys (2026-07-30)**: usar `docker compose up -d --build whatsapp-baileys`. El servicio dedicado del compose principal usa Node 20, monta `whatsapp-baileys/sessions`, incluye healthcheck y `restart: unless-stopped`. Laravel debe usar `WHATSAPP_BAILEYS_URL=http://whatsapp-baileys:3025`.
 - **Runbook de producción (2026-07-30)**: seguir `deploy/PRODUCTION_RELEASE.md`. Producción mantiene Laravel/Nginx/MySQL/Redis nativos y ejecuta solo Baileys con `whatsapp-baileys/compose.production.yml`; allí la URL de Laravel es `http://127.0.0.1:3025`. Respaldar DB y volumen antes de desplegar.
+- **Módulos fijos por plan (2026-07-30)**: Trial/Básico no incluyen WhatsApp; Pro e Ilimitado sí. Cámaras queda desactivado para todos y fuera de los defaults. Ejecutar `PlanesSeeder --force` aplica la definición a planes y tenants Stripe activos sin alterar módulos de planes manuales.
 
 ## Cortes — ventas por proveedor, num_ventas, y totales por método de pago
 - `ventas_departamento` en response agrupa por proveedor via JOIN: `venta_items → productos → proveedores`.

@@ -23,7 +23,7 @@ class RegisterController extends Controller
         'productos', 'categorias', 'clientes', 'abonos',
         'reportes', 'proveedores', 'pagos_proveedores',
         'cotizaciones', 'pedidos', 'usuarios', 'roles',
-        'configuracion', 'camaras',
+        'configuracion',
     ];
 
     public function register(Request $request)
