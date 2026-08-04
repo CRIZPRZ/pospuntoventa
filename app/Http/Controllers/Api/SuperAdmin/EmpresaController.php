@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\RecargaCredito;
 use App\Models\Sucursal;
 use App\Models\User;
+use App\Services\DesktopLicenseService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Spatie\Permission\Models\Permission;
@@ -258,6 +259,101 @@ class EmpresaController extends Controller
                 'costo_timbre'    => (float) $fresh->costo_timbre,
             ],
             'message' => $msg,
+        ]);
+    }
+
+    public function license(Empresa $empresa, DesktopLicenseService $service)
+    {
+        $license = $service->getOrCreateForEmpresa($empresa);
+
+        return response()->json([
+            'data' => array_merge(
+                $service->buildResponse($license),
+                [
+                    'devices' => $license->devices()
+                        ->orderByDesc('is_active')
+                        ->orderByDesc('last_seen_at')
+                        ->get([
+                            'device_uuid',
+                            'device_name',
+                            'platform',
+                            'app_version',
+                            'last_seen_at',
+                            'last_token_issued_at',
+                            'revoked_at',
+                            'is_active',
+                        ]),
+                ]
+            ),
+        ]);
+    }
+
+    public function updateLicense(Request $request, Empresa $empresa, DesktopLicenseService $service)
+    {
+        $data = $request->validate([
+            'status' => 'required|in:active,suspended,cancelled',
+            'max_devices' => 'required|integer|min:1|max:100',
+        ]);
+
+        $license = $service->getOrCreateForEmpresa($empresa);
+        $license->update([
+            'status' => $data['status'],
+            'max_devices' => (int) $data['max_devices'],
+        ]);
+
+        return response()->json([
+            'message' => 'Licencia actualizada correctamente.',
+            'data' => array_merge(
+                $service->buildResponse($license->fresh()),
+                [
+                    'devices' => $license->fresh()->devices()
+                        ->orderByDesc('is_active')
+                        ->orderByDesc('last_seen_at')
+                        ->get([
+                            'device_uuid',
+                            'device_name',
+                            'platform',
+                            'app_version',
+                            'last_seen_at',
+                            'last_token_issued_at',
+                            'revoked_at',
+                            'is_active',
+                        ]),
+                ]
+            ),
+        ]);
+    }
+
+    public function revokeLicenseDevice(Empresa $empresa, string $deviceUuid, DesktopLicenseService $service)
+    {
+        $license = $service->getOrCreateForEmpresa($empresa);
+
+        $device = $license->devices()
+            ->where('device_uuid', $deviceUuid)
+            ->firstOrFail();
+
+        $service->deactivateDevice($device);
+
+        return response()->json([
+            'message' => 'Dispositivo revocado correctamente.',
+            'data' => array_merge(
+                $service->buildResponse($license->fresh()),
+                [
+                    'devices' => $license->fresh()->devices()
+                        ->orderByDesc('is_active')
+                        ->orderByDesc('last_seen_at')
+                        ->get([
+                            'device_uuid',
+                            'device_name',
+                            'platform',
+                            'app_version',
+                            'last_seen_at',
+                            'last_token_issued_at',
+                            'revoked_at',
+                            'is_active',
+                        ]),
+                ]
+            ),
         ]);
     }
 

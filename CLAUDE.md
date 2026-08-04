@@ -55,6 +55,23 @@ make fresh       # migrate:fresh --seed
 - `BillingController::planesPublicos()` solo debe exponer planes `tipo='stripe'`. Los personalizados `manual` y cualquier legacy `gratis` deben quedar fuera del catálogo público.
 - `SuperAdmin\PlanController` y la UI de superadmin ya no deben permitir `tipo='gratis'`; el modelo vigente es trial temporal + planes `stripe`/`manual`.
 - `WebhookController` debe ser idempotente usando la tabla `stripe_webhook_events`, ignorar `event_id` repetidos y sincronizar `plan_vigente_hasta` desde `current_period_end` real de Stripe, no desde `now()`.
+- Desde el 4 de agosto de 2026 existe una primera capa de licencias desktop: tablas `licenses` y `license_devices`, modelos `License`/`LicenseDevice` y servicio `DesktopLicenseService`.
+- La licencia desktop no reemplaza billing; resuelve estado desde `Empresa::accesoSistemaVigente()` y solo agrega overrides manuales (`suspended`, `cancelled`) y una ventana `grace_until` para tolerancia offline.
+- Endpoints backend desktop vigentes:
+  - `GET /api/desktop/license`
+  - `POST /api/desktop/license/activate`
+  - `POST /api/desktop/license/deactivate-device`
+  - `POST /api/desktop/license/validate`
+- `POST /api/desktop/license/validate` usa `license_key`, `device_uuid` y opcionalmente `fingerprint`; si el dispositivo no está vinculado o la huella no coincide, responde 422.
+- La gracia offline se controla con `DESKTOP_LICENSE_GRACE_HOURS` y se renueva en cada activación/validación correcta. El frontend/instalable debe bloquear cuando `resolved_status` sea `expired`, `suspended` o `cancelled`.
+- Desde el 4 de agosto de 2026, superadmin ya tiene un panel backend para licencias desktop por empresa:
+  - `GET /api/superadmin/empresas/{empresa}/license`
+  - `PUT /api/superadmin/empresas/{empresa}/license`
+  - `POST /api/superadmin/empresas/{empresa}/license/devices/{deviceUuid}/revoke`
+- `GET /api/superadmin/empresas/{empresa}/license` retorna la misma resolución de estado que consume el instalable más la lista de dispositivos registrados, activos y revocados.
+- `PUT /api/superadmin/empresas/{empresa}/license` no altera billing/Stripe; solo aplica override administrativo de licencia (`active`, `suspended`, `cancelled`) y cambia `max_devices`.
+- Desde el 4 de agosto de 2026, el shell inicial de Electron ya existe en el frontend y usa `POST /api/desktop/license/activate` como handshake principal. Esa respuesta hoy es el contrato inicial del instalable.
+- Desde el 4 de agosto de 2026, el instalable también revalida con `POST /api/desktop/license/validate`; backend debe mantener alineado el shape de `license/access/modules/limits/empresa` entre `activate` y `validate`.
 - Existe el comando `php artisan billing:audit-production` para auditar legacy de billing; con `--apply` corrige inconsistencias seguras como planes `gratis` activos, `sin_plan/trial` sin vigencia o con módulos activos y planes manuales con Stripe IDs cargados.
 - Los endpoints mutativos de setup CFDI (`/api/facturacion/*`) ahora requieren `can:gestionar facturacion`. Las mutaciones de Mercado Libre también deben vivir bajo `can:gestionar mercado libre`; `can:ver mercado libre` queda solo para lecturas.
 - Mantener sincronizados estos tres puntos para evitar regresiones:
