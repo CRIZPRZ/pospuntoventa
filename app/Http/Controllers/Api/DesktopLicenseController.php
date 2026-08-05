@@ -60,6 +60,14 @@ class DesktopLicenseController extends Controller
         }
 
         $license = $this->service->getOrCreateForEmpresa($empresa);
+        $licenseResponse = $this->service->buildResponse($license);
+
+        if (! $licenseResponse['access']['allowed']) {
+            return response()->json([
+                'data' => $licenseResponse,
+            ]);
+        }
+
         $device = $this->service->activateDevice($license, $data);
 
         return response()->json([

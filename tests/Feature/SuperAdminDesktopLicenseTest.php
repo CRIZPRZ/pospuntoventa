@@ -71,6 +71,7 @@ class SuperAdminDesktopLicenseTest extends TestCase
     {
         $service = app(DesktopLicenseService::class);
         $license = $service->getOrCreateForEmpresa($empresa);
+        $license->update(['status' => 'active']);
 
         $service->activateDevice($license, [
             'device_uuid' => 'desktop-001',

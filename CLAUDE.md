@@ -64,6 +64,9 @@ make fresh       # migrate:fresh --seed
   - `POST /api/desktop/license/validate`
 - `POST /api/desktop/license/validate` usa `license_key`, `device_uuid` y opcionalmente `fingerprint`; si el dispositivo no está vinculado o la huella no coincide, responde 422.
 - La gracia offline se controla con `DESKTOP_LICENSE_GRACE_HOURS` y se renueva en cada activación/validación correcta. El frontend/instalable debe bloquear cuando `resolved_status` sea `expired`, `suspended` o `cancelled`.
+- Toda licencia desktop nueva se crea `suspended` y requiere activación manual desde superadmin. `POST /api/desktop/license/activate` no debe registrar un dispositivo mientras `access.allowed` sea `false`.
+- La app revalida cada 60 segundos y al recuperar foco/visibilidad/conexión; suspender desde superadmin bloquea sin cerrar y abrir EventPOS.
+- Una licencia suspendida nueva no crea dispositivo. El cliente repite `activate` hasta que superadmin la habilita y solo usa `validate` una vez que la respuesta incluye el dispositivo vinculado.
 - Desde el 4 de agosto de 2026, superadmin ya tiene un panel backend para licencias desktop por empresa:
   - `GET /api/superadmin/empresas/{empresa}/license`
   - `PUT /api/superadmin/empresas/{empresa}/license`

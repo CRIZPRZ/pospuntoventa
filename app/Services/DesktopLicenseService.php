@@ -16,7 +16,7 @@ class DesktopLicenseService
             ['empresa_id' => $empresa->id],
             [
                 'license_key' => $this->generateLicenseKey(),
-                'status' => 'active',
+                'status' => 'suspended',
                 'issued_at' => now(),
                 'max_devices' => (int) config('desktop.default_max_devices', 1),
                 'plan_snapshot' => $this->buildPlanSnapshot($empresa),

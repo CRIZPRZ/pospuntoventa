@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Empresa;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\DesktopLicenseService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -16,6 +17,7 @@ class DesktopLicenseTest extends TestCase
     public function test_authenticated_user_can_activate_desktop_license_device(): void
     {
         [$empresa, $user] = $this->createEmpresaConUsuarioActivo();
+        $this->enableDesktopLicense($empresa);
 
         Sanctum::actingAs($user);
 
@@ -47,6 +49,7 @@ class DesktopLicenseTest extends TestCase
     public function test_license_validation_respects_grace_period_for_expired_company_access(): void
     {
         [$empresa, $user] = $this->createEmpresaConUsuarioActivo();
+        $this->enableDesktopLicense($empresa);
 
         Sanctum::actingAs($user);
 
@@ -80,6 +83,7 @@ class DesktopLicenseTest extends TestCase
     public function test_license_cannot_activate_more_devices_than_allowed(): void
     {
         [$empresa, $user] = $this->createEmpresaConUsuarioActivo();
+        $this->enableDesktopLicense($empresa);
 
         Sanctum::actingAs($user);
 
@@ -99,6 +103,41 @@ class DesktopLicenseTest extends TestCase
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['device_uuid']);
+    }
+
+    public function test_new_desktop_license_is_suspended_and_does_not_register_device(): void
+    {
+        [$empresa, $user] = $this->createEmpresaConUsuarioActivo();
+
+        Sanctum::actingAs($user);
+
+        $response = $this->postJson('/api/desktop/license/activate', [
+            'device_uuid' => 'desktop-pending',
+            'device_name' => 'Caja Pendiente',
+            'fingerprint' => 'fp-pending',
+            'platform' => 'windows',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('data.access.allowed', false)
+            ->assertJsonPath('data.license.status', 'suspended')
+            ->assertJsonPath('data.license.resolved_status', 'suspended')
+            ->assertJsonPath('data.device', null);
+
+        $this->assertDatabaseHas('licenses', [
+            'empresa_id' => $empresa->id,
+            'status' => 'suspended',
+        ]);
+
+        $this->assertDatabaseMissing('license_devices', [
+            'device_uuid' => 'desktop-pending',
+        ]);
+    }
+
+    private function enableDesktopLicense(Empresa $empresa): void
+    {
+        $license = app(DesktopLicenseService::class)->getOrCreateForEmpresa($empresa);
+        $license->update(['status' => 'active']);
     }
 
     private function createEmpresaConUsuarioActivo(): array

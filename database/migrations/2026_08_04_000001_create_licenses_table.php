@@ -12,7 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('empresa_id')->constrained()->cascadeOnDelete();
             $table->string('license_key')->unique();
-            $table->string('status')->default('active');
+            $table->string('status')->default('suspended');
             $table->timestamp('issued_at')->nullable();
             $table->timestamp('valid_until')->nullable();
             $table->timestamp('grace_until')->nullable();
