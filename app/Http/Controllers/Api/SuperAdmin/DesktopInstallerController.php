@@ -16,10 +16,19 @@ class DesktopInstallerController extends Controller
     public function upload(Request $request, DesktopInstallerService $service)
     {
         $request->validate([
-            'installer' => ['required', 'file', 'mimes:exe', 'max:512000'],
+            'installer' => ['required', 'file', 'max:512000'],
         ]);
 
-        $data = $service->replace($request->file('installer'));
+        $file = $request->file('installer');
+        $extension = strtolower($file->getClientOriginalExtension());
+
+        if ($extension !== 'exe') {
+            return response()->json([
+                'message' => 'El archivo debe ser un instalador .exe.',
+            ], 422);
+        }
+
+        $data = $service->replace($file);
 
         return response()->json([
             'message' => 'Instalador subido correctamente.',
