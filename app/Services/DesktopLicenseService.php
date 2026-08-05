@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Exceptions\DesktopLicenseException;
 use App\Models\Empresa;
 use App\Models\License;
 use App\Models\LicenseDevice;
+use App\Models\User;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -74,6 +76,46 @@ class DesktopLicenseService
         return $device->fresh();
     }
 
+    public function activateDeviceByEmail(array $data): array
+    {
+        $license = License::with('empresa.plan', 'empresa.modulos')
+            ->where('license_key', $data['license_key'])
+            ->first();
+
+        if (! $license) {
+            throw new DesktopLicenseException('invalid_license_key', 'La llave de licencia no es válida.');
+        }
+
+        if ($license->status === 'suspended') {
+            throw new DesktopLicenseException('license_suspended', 'Esta licencia está suspendida. Contacta a soporte o a tu administrador.');
+        }
+
+        if ($license->status === 'cancelled') {
+            throw new DesktopLicenseException('license_cancelled', 'Esta licencia fue cancelada.');
+        }
+
+        $empresa = $license->empresa;
+        if (! $empresa->accesoSistemaVigente() && ! $license->grace_until?->isFuture()) {
+            throw new DesktopLicenseException('license_expired', 'Esta licencia venció.');
+        }
+
+        $user = User::where('email', $data['email'])
+            ->where('empresa_id', $license->empresa_id)
+            ->first();
+
+        if (! $user || ! $user->hasRole('admin')) {
+            throw new DesktopLicenseException('email_mismatch', 'Ese correo no pertenece a un administrador de la empresa dueña de esta llave.');
+        }
+
+        try {
+            $device = $this->activateDevice($license, $data);
+        } catch (ValidationException) {
+            throw new DesktopLicenseException('max_devices_reached', 'Se alcanzó el número máximo de equipos permitidos para esta licencia.');
+        }
+
+        return $this->buildResponse($license->fresh(), $device);
+    }
+
     public function deactivateDevice(LicenseDevice $device): void
     {
         $device->forceFill([
@@ -84,22 +126,18 @@ class DesktopLicenseService
 
     public function validateDevice(License $license, string $deviceUuid, ?string $fingerprint = null): LicenseDevice
     {
-        $device = $license->devices()
-            ->where('device_uuid', $deviceUuid)
-            ->where('is_active', true)
-            ->whereNull('revoked_at')
-            ->first();
+        $device = $license->devices()->where('device_uuid', $deviceUuid)->first();
 
         if (! $device) {
-            throw ValidationException::withMessages([
-                'device_uuid' => 'Este dispositivo no está vinculado a la licencia.',
-            ]);
+            throw new DesktopLicenseException('device_not_registered', 'Este dispositivo no está vinculado a la licencia.');
+        }
+
+        if (! $device->is_active || $device->revoked_at) {
+            throw new DesktopLicenseException('device_revoked', 'Este dispositivo fue revocado.');
         }
 
         if ($fingerprint && $device->fingerprint !== $fingerprint) {
-            throw ValidationException::withMessages([
-                'fingerprint' => 'La huella del dispositivo no coincide con la licencia registrada.',
-            ]);
+            throw new DesktopLicenseException('device_revoked', 'La huella del dispositivo no coincide con la licencia registrada.');
         }
 
         $device->forceFill([
@@ -118,7 +156,7 @@ class DesktopLicenseService
 
     public function buildResponse(License $license, ?LicenseDevice $device = null): array
     {
-        $license->loadMissing('empresa.plan', 'empresa.modulos', 'devices');
+        $license->loadMissing('empresa.plan', 'empresa.modulos', 'devices', 'owner');
         $empresa = $license->empresa;
 
         [$resolvedStatus, $allowed, $reason] = $this->resolveStatus($license, $empresa);
@@ -135,6 +173,11 @@ class DesktopLicenseService
                 'max_devices' => (int) $license->max_devices,
                 'offline_grace_hours' => (int) config('desktop.license_offline_grace_hours', 48),
                 'activation_token' => $device ? $this->issueActivationToken($license, $device) : null,
+                'owner' => $license->owner ? [
+                    'id' => $license->owner->id,
+                    'name' => $license->owner->name,
+                    'email' => $license->owner->email,
+                ] : null,
             ],
             'device' => $device ? [
                 'device_uuid' => $device->device_uuid,

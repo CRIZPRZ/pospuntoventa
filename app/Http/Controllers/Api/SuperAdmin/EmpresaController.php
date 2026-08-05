@@ -3,15 +3,18 @@
 namespace App\Http\Controllers\Api\SuperAdmin;
 
 use App\Http\Controllers\Controller;
+use App\Mail\DesktopInstallerMail;
 use App\Models\Empresa;
 use App\Models\EmpresaModulo;
 use App\Models\Plan;
 use App\Models\RecargaCredito;
 use App\Models\Sucursal;
 use App\Models\User;
+use App\Services\DesktopInstallerService;
 use App\Services\DesktopLicenseService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
@@ -262,6 +265,22 @@ class EmpresaController extends Controller
         ]);
     }
 
+    public function usuarios(Empresa $empresa)
+    {
+        $usuarios = $empresa->usuarios()
+            ->with('roles:id,name')
+            ->orderBy('name')
+            ->get(['id', 'name', 'email'])
+            ->map(fn (User $user) => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'roles' => $user->roles->pluck('name'),
+            ]);
+
+        return response()->json(['data' => $usuarios]);
+    }
+
     public function license(Empresa $empresa, DesktopLicenseService $service)
     {
         $license = $service->getOrCreateForEmpresa($empresa);
@@ -293,12 +312,27 @@ class EmpresaController extends Controller
         $data = $request->validate([
             'status' => 'required|in:active,suspended,cancelled',
             'max_devices' => 'required|integer|min:1|max:100',
+            'owner_user_id' => ['nullable', 'integer', 'exists:users,id'],
         ]);
 
         $license = $service->getOrCreateForEmpresa($empresa);
+
+        if (array_key_exists('owner_user_id', $data) && $data['owner_user_id']) {
+            $ownerBelongsToEmpresa = User::where('id', $data['owner_user_id'])
+                ->where('empresa_id', $empresa->id)
+                ->exists();
+
+            if (! $ownerBelongsToEmpresa) {
+                return response()->json([
+                    'message' => 'El usuario responsable debe pertenecer a esta empresa.',
+                ], 422);
+            }
+        }
+
         $license->update([
             'status' => $data['status'],
             'max_devices' => (int) $data['max_devices'],
+            'owner_user_id' => $data['owner_user_id'] ?? null,
         ]);
 
         return response()->json([
@@ -322,6 +356,33 @@ class EmpresaController extends Controller
                 ]
             ),
         ]);
+    }
+
+    public function sendInstallerEmail(
+        Request $request,
+        Empresa $empresa,
+        DesktopLicenseService $service,
+        DesktopInstallerService $installerService
+    ) {
+        $data = $request->validate([
+            'email' => ['required', 'email'],
+        ]);
+
+        $installer = $installerService->current();
+
+        if (! $installer) {
+            return response()->json([
+                'message' => 'No hay un instalador desktop disponible. Súbelo primero desde el panel.',
+            ], 422);
+        }
+
+        $license = $service->getOrCreateForEmpresa($empresa);
+
+        Mail::to($data['email'])->queue(
+            new DesktopInstallerMail($empresa, $license, $installer['url'], $data['email'])
+        );
+
+        return response()->json(['message' => 'Correo enviado correctamente.']);
     }
 
     public function revokeLicenseDevice(Empresa $empresa, string $deviceUuid, DesktopLicenseService $service)

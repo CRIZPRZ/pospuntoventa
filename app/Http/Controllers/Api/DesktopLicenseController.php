@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\DesktopLicenseException;
 use App\Http\Controllers\Controller;
 use App\Models\License;
 use App\Services\DesktopLicenseService;
@@ -85,12 +86,33 @@ class DesktopLicenseController extends Controller
 
         $license = License::with('empresa.plan', 'empresa.modulos')
             ->where('license_key', $data['license_key'])
-            ->firstOrFail();
+            ->first();
+
+        if (! $license) {
+            throw new DesktopLicenseException('invalid_license_key', 'La llave de licencia no es válida.');
+        }
 
         $device = $this->service->validateDevice($license, $data['device_uuid'], $data['fingerprint'] ?? null);
 
         return response()->json([
             'data' => $this->service->buildResponse($license->fresh(), $device),
+        ]);
+    }
+
+    public function activateByEmail(Request $request)
+    {
+        $data = $request->validate([
+            'license_key' => ['required', 'string', 'max:80'],
+            'email' => ['required', 'email', 'max:190'],
+            'device_uuid' => ['required', 'string', 'max:120'],
+            'device_name' => ['required', 'string', 'max:120'],
+            'fingerprint' => ['required', 'string', 'max:255'],
+            'platform' => ['required', 'string', 'max:60'],
+            'app_version' => ['nullable', 'string', 'max:40'],
+        ]);
+
+        return response()->json([
+            'data' => $this->service->activateDeviceByEmail($data),
         ]);
     }
 

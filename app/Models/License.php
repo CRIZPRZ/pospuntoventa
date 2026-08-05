@@ -10,6 +10,7 @@ class License extends Model
 {
     protected $fillable = [
         'empresa_id',
+        'owner_user_id',
         'license_key',
         'status',
         'issued_at',
@@ -37,5 +38,10 @@ class License extends Model
     public function devices(): HasMany
     {
         return $this->hasMany(LicenseDevice::class);
+    }
+
+    public function owner(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'owner_user_id');
     }
 }

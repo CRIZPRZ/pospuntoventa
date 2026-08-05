@@ -32,6 +32,7 @@ use App\Http\Controllers\Api\CamaraController;
 use App\Http\Controllers\Api\UbicacionController;
 use App\Http\Controllers\Api\AgentController;
 use App\Http\Controllers\Api\DesktopLicenseController;
+use App\Http\Controllers\Api\SuperAdmin\DesktopInstallerController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('register', [RegisterController::class, 'register'])->middleware('throttle:register');
@@ -65,6 +66,8 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 Route::post('desktop/license/validate', [DesktopLicenseController::class, 'validateLicense']);
+Route::post('desktop/license/activate-device', [DesktopLicenseController::class, 'activateByEmail'])
+    ->middleware('throttle:desktop-activate');
 
 Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
 
@@ -377,9 +380,13 @@ Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(f
     Route::post('empresas/{empresa}/asignar-plan', [SuperAdminEmpresaController::class, 'asignarPlan']);
     Route::post('empresas/{empresa}/recargar-timbres', [SuperAdminEmpresaController::class, 'recargarTimbres']);
     Route::post('empresas/{empresa}/recargar-credito', [SuperAdminEmpresaController::class, 'recargarCredito']);
+    Route::get('empresas/{empresa}/usuarios', [SuperAdminEmpresaController::class, 'usuarios']);
     Route::get('empresas/{empresa}/license', [SuperAdminEmpresaController::class, 'license']);
     Route::put('empresas/{empresa}/license', [SuperAdminEmpresaController::class, 'updateLicense']);
     Route::post('empresas/{empresa}/license/devices/{deviceUuid}/revoke', [SuperAdminEmpresaController::class, 'revokeLicenseDevice']);
+    Route::post('empresas/{empresa}/license/send-installer', [SuperAdminEmpresaController::class, 'sendInstallerEmail']);
+    Route::get('desktop-installer', [DesktopInstallerController::class, 'show']);
+    Route::post('desktop-installer', [DesktopInstallerController::class, 'upload']);
     Route::get('empresas/{empresa}/recargas', [SuscripcionFacturaController::class, 'indexRecargas']);
     Route::post('empresas/{empresa}/facturar-manual', [SuscripcionFacturaController::class, 'facturarManual']);
     Route::post('recargas/{recarga}/facturar', [SuscripcionFacturaController::class, 'facturarRecarga']);

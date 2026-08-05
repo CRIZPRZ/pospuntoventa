@@ -23,6 +23,13 @@ class AppServiceProvider extends ServiceProvider
             ];
         });
 
+        RateLimiter::for('desktop-activate', function (Request $request) {
+            return [
+                Limit::perMinute(5)->by($request->ip()),
+                Limit::perHour(20)->by($request->ip()),
+            ];
+        });
+
         RateLimiter::for('whatsapp', function (Request $request) {
             $tenantId = app()->bound('tenant_id') ? (string) app('tenant_id') : 'no-tenant';
             $userId = (string) ($request->user()?->id ?? $request->ip());

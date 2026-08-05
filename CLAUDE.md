@@ -58,23 +58,33 @@ make fresh       # migrate:fresh --seed
 - Desde el 4 de agosto de 2026 existe una primera capa de licencias desktop: tablas `licenses` y `license_devices`, modelos `License`/`LicenseDevice` y servicio `DesktopLicenseService`.
 - La licencia desktop no reemplaza billing; resuelve estado desde `Empresa::accesoSistemaVigente()` y solo agrega overrides manuales (`suspended`, `cancelled`) y una ventana `grace_until` para tolerancia offline.
 - Endpoints backend desktop vigentes:
-  - `GET /api/desktop/license`
-  - `POST /api/desktop/license/activate`
-  - `POST /api/desktop/license/deactivate-device`
-  - `POST /api/desktop/license/validate`
-- `POST /api/desktop/license/validate` usa `license_key`, `device_uuid` y opcionalmente `fingerprint`; si el dispositivo no está vinculado o la huella no coincide, responde 422.
+  - `GET /api/desktop/license` (auth:sanctum)
+  - `POST /api/desktop/license/activate` (auth:sanctum)
+  - `POST /api/desktop/license/deactivate-device` (auth:sanctum)
+  - `POST /api/desktop/license/validate` (público)
+  - `POST /api/desktop/license/activate-device` (público, `throttle:desktop-activate`) — activación PRE-LOGIN, ver sección siguiente.
+- `POST /api/desktop/license/validate` usa `license_key`, `device_uuid` y opcionalmente `fingerprint`; si el dispositivo no está vinculado responde `422 {message, code: 'device_not_registered'}`, si está revocado o la huella no coincide responde `422 {message, code: 'device_revoked'}`, y si la key no existe responde `422 {message, code: 'invalid_license_key'}`. Estos `code` los usa `DesktopBootstrap.jsx` del frontend para decidir si debe forzar reactivación.
+
+### Activación de licencia PRE-LOGIN (2026-08-05)
+- `POST /api/desktop/license/activate-device` (`DesktopLicenseController::activateByEmail`) es **público** (fuera de `auth:sanctum`), rate-limited con `throttle:desktop-activate` (`RateLimiter::for('desktop-activate', ...)` en `AppServiceProvider`, 5/min y 20/hora por IP, mismo patrón que `register`).
+- Body: `{license_key, email, device_uuid, device_name, fingerprint, platform, app_version}`. Resuelve la empresa 100% por `license_key` (no requiere sesión). Valida que `email` pertenezca a un usuario con rol `admin` **de la empresa dueña de esa `license_key`** (`User::where('email',...)->where('empresa_id', $license->empresa_id)->first()` + `hasRole('admin')`, mismo patrón que `CajaController` ya usa para "es admin").
+- Lógica vive en `DesktopLicenseService::activateDeviceByEmail()`, reutiliza `activateDevice()` existente (mismo conteo de `max_devices`).
+- Errores devuelven `{message, code}` vía `App\Exceptions\DesktopLicenseException` (tiene `render()` propio, no pasa por el manejador genérico de `ValidationException`): `invalid_license_key`, `license_suspended`, `license_cancelled`, `license_expired`, `email_mismatch`, `max_devices_reached`. Siempre 422, nunca 401 (el frontend excluye esta URL del interceptor de 401).
+- El frontend persiste la activación en `desktop-device.json` (proceso main de Electron), no en el token de sesión — por eso este endpoint no depende de `auth:sanctum`. Una vez activado el equipo, `DesktopBootstrap.jsx` solo usa `validate` en logins/revalidaciones posteriores, ya no vuelve a llamar `/activate` automáticamente.
+- Tabla `licenses` ahora tiene `owner_user_id` (nullable, FK a `users`, `nullOnDelete`) — ver sección superadmin.
 - La gracia offline se controla con `DESKTOP_LICENSE_GRACE_HOURS` y se renueva en cada activación/validación correcta. El frontend/instalable debe bloquear cuando `resolved_status` sea `expired`, `suspended` o `cancelled`.
 - Toda licencia desktop nueva se crea `suspended` y requiere activación manual desde superadmin. `POST /api/desktop/license/activate` no debe registrar un dispositivo mientras `access.allowed` sea `false`.
 - La app revalida cada 60 segundos y al recuperar foco/visibilidad/conexión; suspender desde superadmin bloquea sin cerrar y abrir EventPOS.
-- Una licencia suspendida nueva no crea dispositivo. El cliente repite `activate` hasta que superadmin la habilita y solo usa `validate` una vez que la respuesta incluye el dispositivo vinculado.
+- Una licencia suspendida nueva no crea dispositivo: `activate-device`/`activate` devuelven `access.allowed=false` sin registrar el equipo hasta que superadmin la habilite. El frontend (`DesktopActivationGate`) reintenta manualmente (botón, sin polling) mientras no esté activada; una vez que el dispositivo queda vinculado, pasa a usar solo `validate`.
 - Desde el 4 de agosto de 2026, superadmin ya tiene un panel backend para licencias desktop por empresa:
   - `GET /api/superadmin/empresas/{empresa}/license`
   - `PUT /api/superadmin/empresas/{empresa}/license`
   - `POST /api/superadmin/empresas/{empresa}/license/devices/{deviceUuid}/revoke`
 - `GET /api/superadmin/empresas/{empresa}/license` retorna la misma resolución de estado que consume el instalable más la lista de dispositivos registrados, activos y revocados.
-- `PUT /api/superadmin/empresas/{empresa}/license` no altera billing/Stripe; solo aplica override administrativo de licencia (`active`, `suspended`, `cancelled`) y cambia `max_devices`.
-- Desde el 4 de agosto de 2026, el shell inicial de Electron ya existe en el frontend y usa `POST /api/desktop/license/activate` como handshake principal. Esa respuesta hoy es el contrato inicial del instalable.
-- Desde el 4 de agosto de 2026, el instalable también revalida con `POST /api/desktop/license/validate`; backend debe mantener alineado el shape de `license/access/modules/limits/empresa` entre `activate` y `validate`.
+- `PUT /api/superadmin/empresas/{empresa}/license` no altera billing/Stripe; solo aplica override administrativo de licencia (`active`, `suspended`, `cancelled`), cambia `max_devices` y desde 2026-08-05 acepta `owner_user_id` (nullable, debe pertenecer a esa empresa) para dejar constancia de qué usuario es responsable de la licencia. La respuesta de `license` (tanto en este endpoint como en `GET`, `/desktop/license`, `activate`, `validate`, `activate-device`) incluye `license.owner: {id, name, email} | null`.
+- `GET /api/superadmin/empresas/{empresa}/usuarios` (nuevo 2026-08-05, `EmpresaController::usuarios`) — lista `{id, name, email, roles}` de los usuarios de esa empresa, usada por el frontend para alimentar el selector de "usuario responsable" en la tarjeta de licencia.
+- Desde el 4 de agosto de 2026, el shell inicial de Electron existe en el frontend. Desde el 5 de agosto de 2026, el handshake principal ya NO es `POST /api/desktop/license/activate` (requiere sesión) sino `POST /api/desktop/license/activate-device` (público, pre-login) — `activate` queda solo como fallback legado si algún equipo antiguo aún no migró su estado local.
+- El instalable revalida con `POST /api/desktop/license/validate`; backend debe mantener alineado el shape de `license/access/modules/limits/empresa/owner` entre `activate`, `activate-device` y `validate`.
 - Existe el comando `php artisan billing:audit-production` para auditar legacy de billing; con `--apply` corrige inconsistencias seguras como planes `gratis` activos, `sin_plan/trial` sin vigencia o con módulos activos y planes manuales con Stripe IDs cargados.
 - Los endpoints mutativos de setup CFDI (`/api/facturacion/*`) ahora requieren `can:gestionar facturacion`. Las mutaciones de Mercado Libre también deben vivir bajo `can:gestionar mercado libre`; `can:ver mercado libre` queda solo para lecturas.
 - Mantener sincronizados estos tres puntos para evitar regresiones:
