@@ -69,6 +69,38 @@ php artisan up
 `PlanesSeeder` usa `updateOrCreate`: sincroniza Básico, Pro e Ilimitado sin
 eliminar planes manuales ni empresas.
 
+## 2.1 Límite de subida de archivos (instalador desktop)
+
+El panel de superadmin sube el instalador `.exe` de EventPOS (`POST /api/superadmin/desktop-installer`),
+que suele pesar 60-150+ MB. PHP-FPM y Nginx en el servidor traen por defecto límites de subida
+mucho menores (a menudo 2-20 MB) — sin este paso, la subida falla con un error genérico.
+
+En el `php.ini` real de PHP-FPM (verificar ruta con `php --ini`, típicamente
+`/etc/php/8.3/fpm/php.ini`):
+
+```ini
+upload_max_filesize = 600M
+post_max_size = 600M
+memory_limit = 512M
+```
+
+En el server block de Nginx del dominio de la API (`/etc/nginx/sites-available/...`):
+
+```nginx
+client_max_body_size 600M;
+```
+
+Después de editar:
+
+```bash
+sudo systemctl reload php8.3-fpm
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Nota: `php/local.ini` y `nginx/default.conf` en este repo solo aplican al entorno Docker de
+desarrollo local — no tienen efecto en producción, donde PHP/Nginx corren instalados directo
+en el servidor.
+
 ## 3. Variables Laravel
 
 En `/var/www/eventpos/.env`:
