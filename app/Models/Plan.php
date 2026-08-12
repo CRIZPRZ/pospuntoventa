@@ -13,11 +13,13 @@ class Plan extends Model
         'nombre', 'descripcion', 'precio_mensual',
         'max_sucursales', 'max_usuarios', 'timbres_incluidos', 'modulos',
         'color', 'stripe_price_id', 'stripe_price_id_anual', 'activo', 'tipo',
+        'periodicidad',
     ];
 
     public function esGratis(): bool  { return $this->tipo === 'gratis'; }
     public function esStripe(): bool  { return $this->tipo === 'stripe'; }
     public function esManual(): bool  { return $this->tipo === 'manual'; }
+    public function esPagoUnico(): bool { return $this->tipo === 'manual' && $this->periodicidad === 'unico'; }
 
     protected $casts = [
         'modulos'    => 'array',

@@ -2,11 +2,13 @@
 
 namespace App\Services;
 
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
 class DesktopInstallerService
 {
     private const DIR = 'desktop';
+    private const ALLOWED_EXTENSIONS = ['exe', 'yml', 'yaml', 'blockmap'];
 
     public function current(): ?array
     {
@@ -28,17 +30,33 @@ class DesktopInstallerService
         ];
     }
 
-    public function replace(\Illuminate\Http\UploadedFile $file): array
+    public function isAllowed(UploadedFile $file): bool
+    {
+        return in_array(strtolower($file->getClientOriginalExtension()), self::ALLOWED_EXTENSIONS, true);
+    }
+
+    /**
+     * Guarda un archivo del set de release (instalador .exe, latest.yml o
+     * .exe.blockmap, generados por electron-builder gracias a la config
+     * "publish" en package.json). Solo reemplaza instaladores .exe viejos —
+     * latest.yml/.blockmap se sobreescriben por nombre exacto sin tocar el
+     * resto, porque electron-updater los necesita a los tres coexistiendo
+     * bajo la misma URL pública (storage/desktop) para poder actualizar
+     * equipos ya instalados.
+     */
+    public function store(UploadedFile $file): void
     {
         $disk = Storage::disk('public');
+        $filename = $file->getClientOriginalName();
 
-        foreach ($disk->files(self::DIR) as $existing) {
-            $disk->delete($existing);
+        if (str_ends_with(strtolower($filename), '.exe')) {
+            foreach ($disk->files(self::DIR) as $existing) {
+                if (str_ends_with(strtolower($existing), '.exe')) {
+                    $disk->delete($existing);
+                }
+            }
         }
 
-        $filename = $file->getClientOriginalName();
         $disk->putFileAs(self::DIR, $file, $filename);
-
-        return $this->current();
     }
 }

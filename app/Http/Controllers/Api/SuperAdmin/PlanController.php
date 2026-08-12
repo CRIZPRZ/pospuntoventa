@@ -35,6 +35,7 @@ class PlanController extends Controller
             'stripe_price_id'      => 'nullable|string|max:100',
             'stripe_price_id_anual'=> 'nullable|string|max:100',
             'tipo'                 => 'nullable|in:stripe,manual',
+            'periodicidad'         => 'nullable|in:mensual,unico',
             'activo'               => 'boolean',
         ]);
 
@@ -58,6 +59,7 @@ class PlanController extends Controller
             'stripe_price_id'      => 'nullable|string|max:100',
             'stripe_price_id_anual'=> 'nullable|string|max:100',
             'tipo'                 => 'nullable|in:stripe,manual',
+            'periodicidad'         => 'nullable|in:mensual,unico',
             'activo'               => 'boolean',
         ]);
 

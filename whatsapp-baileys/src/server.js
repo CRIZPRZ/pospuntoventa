@@ -5,7 +5,6 @@ import path from 'node:path'
 import P from 'pino'
 import QRCode from 'qrcode'
 import makeWASocket, {
-  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
@@ -108,7 +107,7 @@ async function createSocket(sessionKey, meta = {}) {
   const socket = makeWASocket({
     auth: state,
     version,
-    browser: Browsers.macOS('Desktop'),
+    browser: ['EventPOS', 'Chrome', '1.0.0'],
     printQRInTerminal: false,
     logger,
   })

@@ -38,7 +38,7 @@
               <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
                 Ventas POS · Sistema punto de venta para México<br/>
                 Si tienes dudas escríbenos a
-                <a href="mailto:soporte@eventpos.online" style="color:#2563eb;text-decoration:none;">soporte@eventpos.online</a>
+                <a href="mailto:c.lira.prz@gmail.com" style="color:#2563eb;text-decoration:none;">c.lira.prz@gmail.com</a>
               </p>
             </td>
           </tr>

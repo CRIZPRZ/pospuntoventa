@@ -47,6 +47,6 @@
 
 <p style="margin:0;font-size:13px;color:#9ca3af;line-height:1.6;">
   ¿Tienes dudas? Contáctanos en
-  <a href="mailto:soporte@eventpos.online" style="color:#2563eb;text-decoration:none;">soporte@eventpos.online</a>
+  <a href="mailto:c.lira.prz@gmail.com" style="color:#2563eb;text-decoration:none;">c.lira.prz@gmail.com</a>
 </p>
 @endsection

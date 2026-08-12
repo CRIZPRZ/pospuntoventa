@@ -16,23 +16,25 @@ class DesktopInstallerController extends Controller
     public function upload(Request $request, DesktopInstallerService $service)
     {
         $request->validate([
-            'installer' => ['required', 'file', 'max:512000'],
+            'files' => ['required', 'array', 'min:1'],
+            'files.*' => ['file', 'max:512000'],
         ]);
 
-        $file = $request->file('installer');
-        $extension = strtolower($file->getClientOriginalExtension());
-
-        if ($extension !== 'exe') {
-            return response()->json([
-                'message' => 'El archivo debe ser un instalador .exe.',
-            ], 422);
+        foreach ($request->file('files') as $file) {
+            if (!$service->isAllowed($file)) {
+                return response()->json([
+                    'message' => "Archivo no permitido: {$file->getClientOriginalName()}. Solo .exe, .yml o .blockmap.",
+                ], 422);
+            }
         }
 
-        $data = $service->replace($file);
+        foreach ($request->file('files') as $file) {
+            $service->store($file);
+        }
 
         return response()->json([
-            'message' => 'Instalador subido correctamente.',
-            'data' => $data,
+            'message' => 'Archivos subidos correctamente.',
+            'data' => $service->current(),
         ]);
     }
 }

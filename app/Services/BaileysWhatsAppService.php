@@ -76,7 +76,15 @@ class BaileysWhatsAppService
         $client = Http::acceptJson()
             ->withToken($token)
             ->connectTimeout(5)
-            ->timeout(60);
+            ->timeout(60)
+            // Reintenta hasta 3 veces (con 500ms/1s/1.5s entre intentos) ante
+            // fallos de CONEXIÓN (incluye hipos transitorios del DNS interno
+            // de Docker al resolver el hostname del contenedor de Baileys).
+            // Laravel's retry() solo reintenta excepciones de conexión por
+            // default (no respuestas HTTP 4xx/5xx, esas las maneja el
+            // ->failed() de abajo), así que no reintenta errores reales del
+            // lado de Baileys, solo problemas de red pasajeros.
+            ->retry(3, fn (int $attempt) => $attempt * 500);
 
         $response = $method === 'get'
             ? $client->get($baseUrl . $path, $payload)
