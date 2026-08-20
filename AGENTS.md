@@ -298,3 +298,12 @@ php artisan migrate --force
 - `auto_send_ticket` es opt-in (`false` por defecto). El listener en cola tiene tres intentos y deduplicación por empresa/venta; requiere un worker permanente `php artisan queue:work`.
 - Los cinco flags `auto_send_*` también actúan como habilitación del tipo de envío. Si el flag está apagado, frontend oculta la acción y backend rechaza el endpoint con `422`; ocultar el botón no es suficiente.
 - `WhatsAppController::connect()` no acepta ni persiste `auto_send_*`. Cada check se actualiza de forma individual mediante `PUT /api/configuracion`; conectar o generar QR no debe producir guardados laterales de preferencias.
+
+## Puntos de lealtad (2026-08-17)
+- No es módulo de plan — siempre incluido, el negocio lo activa/desactiva por su cuenta desde Configuración. No agregar gate `can:` ni entrada en `modulosDefault()`/`MODULOS_TRIAL`.
+- Config vive en `configuraciones.config->loyalty`, agregada a `EMPRESA_SECTIONS` en `ConfiguracionController` — a nivel empresa (el saldo de puntos ya es por `Cliente::empresa_id`, no por sucursal). Shape: `{ activo, modo: 'total'|'producto', monto_por_punto, puntos_otorgados, valor_punto }`.
+- `app/Services/LoyaltyService.php` centraliza el cálculo: `calcularPuntosGanados()`, `calcularDescuentoPuntos()` (solo valida/calcula), `registrarGanados()`/`aplicarCanje()` (mutan saldo + ledger).
+- Tablas nuevas: `loyalty_transactions` (ledger append-only, `type` earned/redeemed/adjusted), `clientes.points_balance`/`lifetime_points` (contadores denormalizados, en sync con el ledger dentro de la misma transacción SQL), `productos.puntos_por_unidad` (override opcional para modo `producto`), `ventas.puntos_ganados`/`puntos_canjeados`.
+- Canje es de un solo paso, sin QR: frontend manda `puntos_canjeados` en `POST /api/ventas`, se valida/descuenta/registra dentro de la misma `DB::transaction` que crea la venta. `VentaController@cancelar` revierte todo (ganados y canjeados) con un registro `adjusted`, clamp a 0.
+- `GET /api/clientes/{id}/puntos` — saldo + historial, mismo permiso `can:ver clientes`.
+- QR de canje real queda pendiente para cuando exista módulo de tienda online — patrón investigado en el proyecto hermano `pos-fenicia` (doble QR: identidad autofirmada HMAC + canje opaco con reserva en dos fases).

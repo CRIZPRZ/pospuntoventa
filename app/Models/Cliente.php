@@ -15,12 +15,15 @@ class Cliente extends Model
         'empresa_id', 'sucursal_id', 'nombre', 'email', 'telefono', 'rfc',
         'direccion', 'limite_credito', 'saldo_credito', 'activo',
         'codigo_postal', 'regimen_fiscal', 'uso_cfdi',
+        'points_balance', 'lifetime_points',
     ];
 
     protected $casts = [
-        'limite_credito' => 'decimal:2',
-        'saldo_credito'  => 'decimal:2',
-        'activo'         => 'boolean',
+        'limite_credito'  => 'decimal:2',
+        'saldo_credito'   => 'decimal:2',
+        'activo'          => 'boolean',
+        'points_balance'  => 'integer',
+        'lifetime_points' => 'integer',
     ];
 
     protected static function booted(): void
@@ -46,6 +49,11 @@ class Cliente extends Model
     public function abonos()
     {
         return $this->hasMany(Abono::class);
+    }
+
+    public function loyaltyTransactions()
+    {
+        return $this->hasMany(LoyaltyTransaction::class);
     }
 
     public function creditoDisponible()

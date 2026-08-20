@@ -105,6 +105,7 @@ Route::middleware(['auth:sanctum', 'check.trial'])->group(function () {
         Route::get('clientes', [ClienteController::class, 'index']);
         Route::get('clientes/{cliente}', [ClienteController::class, 'show']);
         Route::get('clientes/{cliente}/resumen', [AbonoController::class, 'resumen']);
+        Route::get('clientes/{cliente}/puntos', [ClienteController::class, 'puntos']);
     });
     Route::middleware('can:gestionar clientes')->group(function () {
         Route::post('clientes', [ClienteController::class, 'store']);

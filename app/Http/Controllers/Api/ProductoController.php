@@ -216,6 +216,7 @@ class ProductoController extends Controller
             'activo' => ['nullable', 'boolean'],
             'disponible_ml' => ['nullable', 'boolean'],
             'control_stock' => ['nullable', 'boolean'],
+            'puntos_por_unidad' => ['nullable', 'integer', 'min:0'],
         ]);
 
         if ($request->hasFile('imagenes') || $request->has('imagenes_mantener')) {

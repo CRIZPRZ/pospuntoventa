@@ -17,13 +17,15 @@ class Producto extends Model
         'empresa_id', 'sucursal_id', 'categoria_id', 'proveedor_id', 'nombre', 'descripcion', 'codigo',
         'codigo_barras', 'precio', 'precio_mayoreo', 'precio_compra', 'stock', 'stock_minimo', 'unidad',
         'imagen', 'imagenes', 'activo', 'disponible_ml', 'control_stock',
+        'puntos_por_unidad',
     ];
 
     protected $casts = [
-        'precio'        => 'decimal:2',
-        'precio_compra' => 'decimal:2',
-        'activo'        => 'boolean',
-        'control_stock' => 'boolean',
+        'precio'            => 'decimal:2',
+        'precio_compra'     => 'decimal:2',
+        'activo'            => 'boolean',
+        'control_stock'     => 'boolean',
+        'puntos_por_unidad' => 'integer',
     ];
 
     protected static function booted(): void

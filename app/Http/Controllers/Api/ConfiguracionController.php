@@ -12,9 +12,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 
 // Secciones que pertenecen a la empresa (legales, compartidas entre sucursales)
-const EMPRESA_SECTIONS = ['empresa', 'facturacion', 'documentos'];
+const EMPRESA_SECTIONS = ['empresa', 'facturacion', 'documentos', 'loyalty'];
 
 // Secciones que pertenecen a la sucursal (operativas, por tienda)
 const SUCURSAL_SECTIONS = ['pos', 'impresion', 'ticket', 'notificaciones', 'nombre_comercial'];
@@ -71,6 +72,12 @@ class ConfiguracionController extends Controller
             'whatsapp'         => ['nullable', 'array'],
             'whatsapp_scope'   => ['nullable', 'string', 'in:empresa,sucursal'],
             'nombre_comercial' => ['nullable', 'string', 'max:150'],
+            'loyalty'          => ['nullable', 'array'],
+            'loyalty.activo'          => ['sometimes', 'boolean'],
+            'loyalty.modo'            => ['sometimes', Rule::in(['total', 'producto'])],
+            'loyalty.monto_por_punto' => ['sometimes', 'numeric', 'min:0.01'],
+            'loyalty.puntos_otorgados'=> ['sometimes', 'integer', 'min:1'],
+            'loyalty.valor_punto'     => ['sometimes', 'numeric', 'min:0'],
         ]);
 
         $empresaData   = array_intersect_key($data, array_flip(EMPRESA_SECTIONS));
@@ -345,6 +352,13 @@ class ConfiguracionController extends Controller
                 'emisor_registrado' => false,
             ],
             'whatsapp' => $this->defaultWhatsApp(),
+            'loyalty' => [
+                'activo'           => false,
+                'modo'             => 'total',
+                'monto_por_punto'  => 10,
+                'puntos_otorgados' => 1,
+                'valor_punto'      => 1,
+            ],
         ];
     }
 

@@ -14,6 +14,7 @@ use App\Events\VentaCompletada;
 use App\Models\WhatsAppConfig;
 use App\Services\WhatsAppService;
 use App\Services\VentaTicketWhatsAppMessage;
+use App\Services\LoyaltyService;
 use Illuminate\Validation\Rule;
 
 class VentaController extends Controller
@@ -80,6 +81,7 @@ class VentaController extends Controller
             'pagos.*.monto' => ['required_with:pagos', 'numeric', 'min:0'],
             'pagos.*.cambio' => ['nullable', 'numeric', 'min:0'],
             'pagos.*.referencia' => ['nullable', 'string', 'max:255'],
+            'puntos_canjeados' => ['nullable', 'integer', 'min:0'],
         ]);
 
         if ($data['tipo_pago'] === 'credito' && empty($data['cliente_id'])) {
@@ -116,12 +118,29 @@ class VentaController extends Controller
             $impuesto = (float) ($data['impuesto'] ?? 0);
             $total = (float) ($data['total'] ?? max(0, $subtotal - $descuento + $impuesto));
 
-            if ($data['tipo_pago'] === 'credito' && $data['cliente_id']) {
+            $cliente = null;
+            if ($data['cliente_id'] ?? null) {
                 $cliente = Cliente::lockForUpdate()->findOrFail($data['cliente_id']);
+            }
+
+            if ($data['tipo_pago'] === 'credito' && $cliente) {
                 $disponible = (float) $cliente->limite_credito - (float) $cliente->saldo_credito;
                 if ($total > $disponible) {
                     abort(422, "Crédito insuficiente. Disponible: $" . number_format($disponible, 2) . ", Requerido: $" . number_format($total, 2));
                 }
+            }
+
+            $loyalty = app(LoyaltyService::class);
+            $loyaltyConfig = $loyalty->config((int) app('tenant_id'));
+
+            $puntosCanjeados = (int) ($data['puntos_canjeados'] ?? 0);
+            $descuentoPuntos = 0.0;
+            if ($puntosCanjeados > 0) {
+                if (!$cliente) {
+                    abort(422, 'Selecciona un cliente para canjear puntos.');
+                }
+                $descuentoPuntos = min($total, $loyalty->calcularDescuentoPuntos($loyaltyConfig, $cliente, $puntosCanjeados));
+                $total = max(0, round($total - $descuentoPuntos, 2));
             }
 
             $venta = Venta::create([
@@ -130,7 +149,7 @@ class VentaController extends Controller
                 'sucursal_id' => $this->sucursalId(),
                 'cliente_id'  => $data['cliente_id'] ?? null,
                 'subtotal'    => $subtotal,
-                'descuento'   => $descuento,
+                'descuento'   => $descuento + $descuentoPuntos,
                 'impuesto'    => $impuesto,
                 'total'       => $total,
                 'tipo_pago'   => $data['tipo_pago'],
@@ -169,9 +188,23 @@ class VentaController extends Controller
                 ]);
             }
 
-            if ($data['tipo_pago'] === 'credito' && $data['cliente_id']) {
-                Cliente::where('id', $data['cliente_id'])->increment('saldo_credito', $total);
+            if ($data['tipo_pago'] === 'credito' && $cliente) {
+                $cliente->increment('saldo_credito', $total);
             }
+
+            $puntosGanados = 0;
+            if ($cliente) {
+                if ($puntosCanjeados > 0) {
+                    $loyalty->aplicarCanje($cliente, $venta, $puntosCanjeados, $descuentoPuntos, $this->sucursalId(), $request->user()->id);
+                }
+
+                $puntosGanados = $loyalty->calcularPuntosGanados($loyaltyConfig, $total, $items);
+                if ($puntosGanados > 0) {
+                    $loyalty->registrarGanados($loyaltyConfig, $cliente, $venta, $puntosGanados, $this->sucursalId(), $request->user()->id);
+                }
+            }
+
+            $venta->update(['puntos_ganados' => $puntosGanados, 'puntos_canjeados' => $puntosCanjeados]);
 
             $this->actualizarCaja($caja, $data['tipo_pago'], $total);
 
@@ -195,7 +228,7 @@ class VentaController extends Controller
         }
 
         $venta = DB::transaction(function () use ($venta, $request) {
-            $venta->load(['items.producto', 'caja']);
+            $venta->load(['items.producto', 'caja', 'cliente']);
 
             foreach ($venta->items as $item) {
                 if ($item->producto?->control_stock) {
@@ -205,6 +238,29 @@ class VentaController extends Controller
 
             if ($venta->caja) {
                 $this->actualizarCaja($venta->caja, $venta->tipo_pago, -1 * (float) $venta->total);
+            }
+
+            if ($venta->cliente && ($venta->puntos_ganados > 0 || $venta->puntos_canjeados > 0)) {
+                $cliente = Cliente::lockForUpdate()->findOrFail($venta->cliente->id);
+                $neto = $venta->puntos_ganados - $venta->puntos_canjeados;
+
+                if ($neto !== 0) {
+                    $cliente->update(['points_balance' => max(0, $cliente->points_balance - $neto)]);
+                }
+                if ($venta->puntos_ganados > 0) {
+                    $cliente->update(['lifetime_points' => max(0, $cliente->lifetime_points - $venta->puntos_ganados)]);
+                }
+
+                \App\Models\LoyaltyTransaction::create([
+                    'empresa_id'  => $cliente->empresa_id,
+                    'cliente_id'  => $cliente->id,
+                    'venta_id'    => $venta->id,
+                    'sucursal_id' => $venta->sucursal_id,
+                    'type'        => 'adjusted',
+                    'points'      => -$neto,
+                    'descripcion' => 'Reverso por cancelación de venta ' . $venta->folio,
+                    'created_by'  => $request->user()->id,
+                ]);
             }
 
             $venta->update(['estado' => 'cancelada', 'cancelada_por' => $request->user()->id]);

@@ -19,14 +19,17 @@ class Venta extends Model
         'subtotal', 'descuento', 'impuesto', 'total',
         'tipo_pago', 'estado', 'cancelada_por', 'notas',
         'cfdi_uuid', 'cfdi_pac_id', 'cfdi_pac', 'cfdi_xml', 'cfdi_status', 'cfdi_receptor',
+        'puntos_ganados', 'puntos_canjeados',
     ];
 
     protected $casts = [
-        'subtotal'      => 'decimal:2',
-        'descuento'     => 'decimal:2',
-        'impuesto'      => 'decimal:2',
-        'total'         => 'decimal:2',
-        'cfdi_receptor' => 'array',
+        'subtotal'         => 'decimal:2',
+        'descuento'        => 'decimal:2',
+        'impuesto'         => 'decimal:2',
+        'total'            => 'decimal:2',
+        'cfdi_receptor'    => 'array',
+        'puntos_ganados'   => 'integer',
+        'puntos_canjeados' => 'integer',
     ];
 
     protected static function booted(): void

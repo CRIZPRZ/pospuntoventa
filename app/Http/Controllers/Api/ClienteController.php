@@ -60,6 +60,15 @@ class ClienteController extends Controller
         }]));
     }
 
+    public function puntos(Cliente $cliente)
+    {
+        return response()->json([
+            'points_balance'  => $cliente->points_balance,
+            'lifetime_points' => $cliente->lifetime_points,
+            'historial'       => $cliente->loyaltyTransactions()->latest()->limit(50)->get(),
+        ]);
+    }
+
     public function update(Request $request, Cliente $cliente)
     {
         $data = $request->validate([
