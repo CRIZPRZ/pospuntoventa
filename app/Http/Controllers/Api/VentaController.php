@@ -283,10 +283,10 @@ class VentaController extends Controller
             'telefono'   => ['nullable', 'string', 'max:30'],
         ]);
 
-        $venta->load(['items']);
+        $venta->load(['items', 'cliente']);
 
         $telefono = null;
-        $cliente = null;
+        $cliente = $venta->cliente;
 
         if (!empty($data['cliente_id'])) {
             $cliente = Cliente::query()->find($data['cliente_id']);
@@ -339,7 +339,7 @@ class VentaController extends Controller
 
         $businessName = $svc->resolveBusinessName((int) $venta->empresa_id, $sucursalId, $technicalConfig, $publicConfig);
 
-        [$body, $ticketUrl] = VentaTicketWhatsAppMessage::build($venta, $businessName);
+        [$body, $ticketUrl] = VentaTicketWhatsAppMessage::build($venta, $businessName, $venta->cliente);
 
         try {
             if ($ticketUrl) {

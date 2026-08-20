@@ -2,11 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\Cliente;
 use App\Models\Venta;
 
 class VentaTicketWhatsAppMessage
 {
-    public static function build(Venta $venta, string $businessName): array
+    public static function build(Venta $venta, string $businessName, ?Cliente $cliente = null): array
     {
         $businessName = trim($businessName);
         $greeting = $businessName !== ''
@@ -22,7 +23,7 @@ class VentaTicketWhatsAppMessage
             $itemLines .= "\n▸ _y " . ($venta->items->count() - 5) . ' producto(s) más_';
         }
 
-        $body = implode("\n", [
+        $lines = [
             $greeting,
             '',
             "🧾 *Folio:* {$venta->folio}",
@@ -30,7 +31,20 @@ class VentaTicketWhatsAppMessage
             '',
             '*Productos:*',
             $itemLines,
-        ]);
+        ];
+
+        if ($cliente && ((int) $venta->puntos_ganados > 0 || (int) $venta->puntos_canjeados > 0)) {
+            $lines[] = '';
+            if ((int) $venta->puntos_canjeados > 0) {
+                $lines[] = '🎁 *Puntos canjeados:* ' . (int) $venta->puntos_canjeados;
+            }
+            if ((int) $venta->puntos_ganados > 0) {
+                $lines[] = '⭐ *Puntos ganados:* +' . (int) $venta->puntos_ganados;
+            }
+            $lines[] = '💳 *Puntos disponibles:* ' . (int) $cliente->points_balance;
+        }
+
+        $body = implode("\n", $lines);
 
         $ticketUrl = $venta->ticket_token
             ? WhatsAppService::publicUrl('/t/' . $venta->ticket_token)

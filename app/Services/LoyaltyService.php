@@ -49,11 +49,11 @@ class LoyaltyService
                     return $puntosProducto * $item['cantidad'];
                 }
 
-                return (int) floor($item['subtotal'] / $config['monto_por_punto']) * $config['puntos_otorgados'];
+                return (int) floor($item['subtotal'] * $config['puntos_otorgados'] / $config['monto_por_punto']);
             });
         }
 
-        return (int) floor($total / $config['monto_por_punto']) * $config['puntos_otorgados'];
+        return (int) floor($total * $config['puntos_otorgados'] / $config['monto_por_punto']);
     }
 
     public function registrarGanados(array $config, Cliente $cliente, Venta $venta, int $puntos, ?int $sucursalId = null, ?int $userId = null): void
