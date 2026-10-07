@@ -21,6 +21,8 @@ const startingSessions = new Map()
 const messageWaiters = new Map()
 const reconnectAttempts = new Map()
 const reconnectTimers = new Map()
+// Sesiones en logout explícito: su evento 'close' no debe programar reconexión.
+const closingSessions = new Set()
 let shuttingDown = false
 
 if (!token) {
@@ -156,6 +158,7 @@ async function createSocket(sessionKey, meta = {}) {
       const message = update.lastDisconnect?.error?.message || ''
       const shouldResetSession = message.includes('Connection Failure')
       const shouldReconnect = !shuttingDown
+        && !closingSessions.has(sessionKey)
         && code !== DisconnectReason.loggedOut
         && !shouldResetSession
       current.status = shouldReconnect ? 'reconnecting' : 'disconnected'
@@ -468,13 +471,36 @@ app.post('/messages/send', async (req, res) => {
 })
 
 app.post('/sessions/:sessionKey/logout', async (req, res) => {
+  const sessionKey = req.params.sessionKey
   try {
-    assertSessionKey(req.params.sessionKey)
-    const session = sessions.get(req.params.sessionKey)
-    if (session?.socket) {
-      await session.socket.logout()
+    assertSessionKey(sessionKey)
+  } catch (error) {
+    return res.status(422).json({ message: error.message })
+  }
+
+  // Evitar que una reconexión programada vuelva a abrir la sesión que se está cerrando.
+  const reconnectTimer = reconnectTimers.get(sessionKey)
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimers.delete(sessionKey)
+  reconnectAttempts.delete(sessionKey)
+
+  closingSessions.add(sessionKey)
+  setTimeout(() => closingSessions.delete(sessionKey), 30000).unref()
+
+  const session = sessions.get(sessionKey)
+  if (session?.socket) {
+    try {
+      // Desvincula el dispositivo del teléfono. Si el socket ya estaba cerrado esto
+      // lanza error; no debe impedir borrar las credenciales guardadas.
+      await withTimeout(session.socket.logout(), 10000, 'Timeout cerrando sesión en WhatsApp')
+    } catch (error) {
+      logger.warn({ error, sessionKey }, 'WhatsApp logout failed, clearing stored session anyway')
+      try { session.socket.end(new Error('Logout')) } catch {}
     }
-    clearStoredSession(req.params.sessionKey)
+  }
+
+  try {
+    clearStoredSession(sessionKey)
     res.json({ status: 'disconnected' })
   } catch (error) {
     res.status(422).json({ message: error.message })
