@@ -123,13 +123,6 @@ class VentaController extends Controller
                 $cliente = Cliente::lockForUpdate()->findOrFail($data['cliente_id']);
             }
 
-            if ($data['tipo_pago'] === 'credito' && $cliente) {
-                $disponible = (float) $cliente->limite_credito - (float) $cliente->saldo_credito;
-                if ($total > $disponible) {
-                    abort(422, "Crédito insuficiente. Disponible: $" . number_format($disponible, 2) . ", Requerido: $" . number_format($total, 2));
-                }
-            }
-
             $loyalty = app(LoyaltyService::class);
             $loyaltyConfig = $loyalty->config((int) app('tenant_id'));
 
@@ -139,8 +132,21 @@ class VentaController extends Controller
                 if (!$cliente) {
                     abort(422, 'Selecciona un cliente para canjear puntos.');
                 }
-                $descuentoPuntos = min($total, $loyalty->calcularDescuentoPuntos($loyaltyConfig, $cliente, $puntosCanjeados));
-                $total = max(0, round($total - $descuentoPuntos, 2));
+
+                // Con canje, el total lo calcula el servidor desde las partidas: versiones
+                // anteriores del POS (app desktop, ventas offline en cola) mandaban `total`
+                // y `descuento` ya con los puntos restados y se descontaban dos veces.
+                $baseSinPuntos   = max(0, round($subtotal + $impuesto, 2));
+                $descuento       = round((float) $items->sum('descuento'), 2);
+                $descuentoPuntos = min($baseSinPuntos, $loyalty->calcularDescuentoPuntos($loyaltyConfig, $cliente, $puntosCanjeados));
+                $total           = max(0, round($baseSinPuntos - $descuentoPuntos, 2));
+            }
+
+            if ($data['tipo_pago'] === 'credito' && $cliente) {
+                $disponible = (float) $cliente->limite_credito - (float) $cliente->saldo_credito;
+                if ($total > $disponible) {
+                    abort(422, "Crédito insuficiente. Disponible: $" . number_format($disponible, 2) . ", Requerido: $" . number_format($total, 2));
+                }
             }
 
             $venta = Venta::create([

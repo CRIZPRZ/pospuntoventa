@@ -404,6 +404,7 @@ Route::middleware(['auth:sanctum', 'superadmin'])->prefix('superadmin')->group(f
     Route::post('config-fiscal/setup-facturapi', [SuperAdminConfigFiscalController::class, 'setupFacturapi']);
     Route::post('config-fiscal/upload-csd', [SuperAdminConfigFiscalController::class, 'uploadCsd']);
     Route::post('config-fiscal/test', [SuperAdminConfigFiscalController::class, 'test']);
+    Route::get('config-fiscal/balance', [SuperAdminConfigFiscalController::class, 'balance']);
     Route::delete('config-fiscal/reset', [SuperAdminConfigFiscalController::class, 'reset']);
 
     // Planes CRUD

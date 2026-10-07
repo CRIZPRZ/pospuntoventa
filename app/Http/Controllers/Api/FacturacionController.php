@@ -111,6 +111,7 @@ class FacturacionController extends Controller
             'nombre_sat'     => $f['nombre_sat'] ?? null,
             'regimen_fiscal' => $f['regimen_fiscal'] ?? '601',
             'codigo_postal'  => $f['codigo_postal'] ?? '',
+            'serie'          => $f['serie'] ?? 'A',
             'org_id'         => $f['facturapi_org_id'] ?? null,
             'org_key'        => $this->orgKey(),
         ];
@@ -147,12 +148,24 @@ class FacturacionController extends Controller
         $facturacion = $config['facturacion'] ?? [];
         $pac         = $this->pac();
 
-        // Facturama: el emisor existe al cargar su CSD — no hay organización que crear.
-        if ($pac->key() === 'facturama') {
+        // PACs multiemisor (CFDI Express, Facturama, SW Sapiens): no hay organización
+        // propia. CFDI Express registra el emisor como merchant; los otros son no-op.
+        if ($pac->key() !== 'facturapi') {
             if (empty(strtoupper(trim($empresa['rfc'] ?? '')))) {
                 return response()->json(['message' => 'Captura el RFC del negocio en la pestaña Empresa antes de continuar'], 422);
             }
-            $this->saveFacturacion(['emisor_registrado' => true]);
+
+            try {
+                $result = $pac->setup($this->emisorCtx());
+            } catch (\Exception $e) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+
+            $this->saveFacturacion(array_filter([
+                'emisor_registrado' => true,
+                'pac_merchant_id'   => $result['merchant_id'] ?? null,
+            ], fn ($v) => $v !== null));
+
             return response()->json([
                 'message'    => 'Emisor listo. Sube tu CSD para comenzar a facturar.',
                 'csd_subido' => (bool) ($facturacion['csd_subido'] ?? false),
@@ -240,7 +253,7 @@ class FacturacionController extends Controller
             'csd_subido'       => false,
         ]);
 
-        return response()->json(['message' => 'Configuración de Facturapi reiniciada']);
+        return response()->json(['message' => 'Configuración de facturación reiniciada']);
     }
 
     public function uploadCsd(Request $request)
@@ -692,17 +705,36 @@ class FacturacionController extends Controller
         $esMoral   = !$esPublico && strlen($rfc) === 12; // moral=12, física=13
         $defaultRegimen = $esMoral ? '601' : '616';
 
-        $items = $venta->items->map(function ($item) use ($tasaIva) {
+        // El CFDI debe sumar lo cobrado: usar el importe de cada partida (ya con su
+        // descuento de línea) y repartir el descuento a nivel venta (ej. puntos).
+        // Antes se usaba precio_unitario de lista y el CFDI salía por más de venta.total.
+        $partidas = $venta->items->values();
+        $importes = \App\Support\ProrrateoDescuento::repartir(
+            $partidas->map(fn ($item) => (float) $item->subtotal)->all(),
+            (float) $venta->total - (float) $venta->impuesto
+        );
+
+        $items = $partidas->map(function ($item, $i) use ($importes) {
+            $cantidad = (float) $item->cantidad;
+
             return [
                 'descripcion'    => mb_strtoupper($item->nombre_producto),
                 'clave_sat'      => $item->producto?->clave_sat        ?? '01010101',
                 'clave_unidad'   => $item->producto?->clave_unidad_sat ?? 'H87',
                 'unidad'         => 'Pieza',
-                'precio_con_iva' => round((float) $item->precio_unitario, 6),
-                'cantidad'       => (float) $item->cantidad,
+                'precio_con_iva' => $cantidad > 0 ? round($importes[$i] / $cantidad, 6) : 0,
+                'cantidad'       => $cantidad,
                 'codigo'         => $item->producto?->codigo_barras ?? '',
             ];
-        })->values()->toArray();
+        })
+            // Partidas 100% descontadas no llevan contraprestación: no van al CFDI.
+            ->filter(fn ($item) => $item['precio_con_iva'] > 0)
+            ->values()
+            ->toArray();
+
+        if (empty($items)) {
+            throw new \Exception('La venta no tiene importe a facturar.');
+        }
 
         $folio = (int) ($facturacion['folio_actual'] ?? 1);
         $this->saveFacturacion(['folio_actual' => $folio + 1]);
@@ -711,6 +743,9 @@ class FacturacionController extends Controller
             'tipo'        => 'I',
             'serie'       => $facturacion['serie'] ?? 'A',
             'folio'       => $folio,
+            // Folio de la venta: CFDI Express lo imprime como folio visible y es estable
+            // entre reintentos (la idempotencia depende de que el cuerpo no cambie).
+            'referencia'  => $venta->folio,
             'forma_pago'  => $this->mapFormaPago($venta->tipo_pago),
             'metodo_pago' => 'PUE',
             'tasa_iva'    => $tasaIva,
@@ -757,7 +792,14 @@ class FacturacionController extends Controller
         $uuidRel= $request->input('uuid_relacionado');
 
         try {
-            $pac->cancelarFactura($ctx, $venta->cfdi_pac_id, $motivo, $uuidRel);
+            $result = $pac->cancelarFactura($ctx, $venta->cfdi_pac_id, $motivo, $uuidRel);
+
+            // CFDI Express responde cancel_pending cuando el SAT aún no confirma
+            // (ej. requiere aceptación del receptor).
+            if (($result['status'] ?? null) === 'cancel_pending') {
+                $venta->update(['cfdi_status' => 'cancellation_requested']);
+                return response()->json(['message' => 'Cancelación solicitada. El SAT la confirmará en las próximas horas.']);
+            }
 
             $venta->update(['cfdi_status' => 'cancelado']);
 
@@ -856,7 +898,8 @@ class FacturacionController extends Controller
             ->where('cfdi_uuid', $uuid)
             ->firstOrFail();
 
-        $pac = \App\Services\Pac\PacManager::for($venta->empresa);
+        // Siempre el PAC que emitió el CFDI, aunque la empresa haya cambiado de PAC después.
+        $pac = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?: $venta->empresa?->pac_provider);
         $ctx = ['cfdi_xml' => $venta->cfdi_xml, 'empresa' => $venta->empresa];
 
         $pdf = $pac->descargarPdf($ctx, $venta->cfdi_pac_id);
@@ -884,7 +927,8 @@ class FacturacionController extends Controller
             ->where('cfdi_uuid', $uuid)
             ->firstOrFail();
 
-        $pac = \App\Services\Pac\PacManager::for($venta->empresa);
+        // Siempre el PAC que emitió el CFDI, aunque la empresa haya cambiado de PAC después.
+        $pac = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?: $venta->empresa?->pac_provider);
         $ctx = ['cfdi_xml' => $venta->cfdi_xml, 'empresa' => $venta->empresa];
         $pdf = $pac->descargarPdf($ctx, $venta->cfdi_pac_id);
 
@@ -908,7 +952,8 @@ class FacturacionController extends Controller
             ]);
         }
 
-        $pac = \App\Services\Pac\PacManager::for($venta->empresa);
+        // Siempre el PAC que emitió el CFDI, aunque la empresa haya cambiado de PAC después.
+        $pac = \App\Services\Pac\PacManager::make($venta->cfdi_pac ?: $venta->empresa?->pac_provider);
         $ctx = ['empresa' => $venta->empresa];
         $xml = $pac->descargarXml($ctx, $venta->cfdi_pac_id);
 

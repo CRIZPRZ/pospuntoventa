@@ -120,7 +120,7 @@ class EmpresaController extends Controller
             'nombre'       => 'sometimes|string|max:255',
             'email'        => 'sometimes|email|unique:empresas,email,' . $empresa->id,
             'status'       => 'sometimes|in:activa,suspendida',
-            'pac_provider' => 'sometimes|in:facturapi,facturama,sw_sapiens',
+            'pac_provider' => 'sometimes|in:' . implode(',', \App\Services\Pac\PacManager::PROVIDERS),
             'whatsapp_provider' => 'sometimes|in:cloud_api,baileys,disabled',
         ]);
 

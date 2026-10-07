@@ -19,6 +19,7 @@ class ConfigFiscalController extends Controller
             'nombre_sat'     => SuperAdminConfig::get('fiscal_razon_social', ''),
             'regimen_fiscal' => SuperAdminConfig::get('fiscal_regimen_fiscal', '601'),
             'codigo_postal'  => SuperAdminConfig::get('fiscal_codigo_postal', ''),
+            'serie'          => SuperAdminConfig::get('fiscal_serie', 'SS'),
             'ambiente'       => $ambiente,
             'org_id'         => SuperAdminConfig::get('fiscal_facturapi_org_id'),
             'org_key'        => $ambiente === 'live'
@@ -29,7 +30,7 @@ class ConfigFiscalController extends Controller
 
     private function pac()
     {
-        return PacManager::make(SuperAdminConfig::get('fiscal_pac_provider', 'facturama'));
+        return PacManager::make(SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT));
     }
 
     /** GET /api/superadmin/config-fiscal */
@@ -45,7 +46,7 @@ class ConfigFiscalController extends Controller
                 'facturapi_org_id' => SuperAdminConfig::get('fiscal_facturapi_org_id'),
                 'csd_subido'       => (bool) SuperAdminConfig::get('fiscal_csd_subido'),
                 'csd_vigencia'     => SuperAdminConfig::get('fiscal_csd_vigencia'),
-                'pac_provider'     => SuperAdminConfig::get('fiscal_pac_provider', 'facturama'),
+                'pac_provider'     => SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT),
             ],
         ]);
     }
@@ -59,7 +60,7 @@ class ConfigFiscalController extends Controller
             'regimen_fiscal' => 'nullable|string|max:10',
             'codigo_postal'  => 'nullable|string|max:10',
             'serie'          => 'nullable|string|max:5',
-            'pac_provider'   => 'nullable|in:facturapi,facturama,sw_sapiens',
+            'pac_provider'   => 'nullable|in:' . implode(',', PacManager::PROVIDERS),
         ]);
 
         foreach ($data as $key => $value) {
@@ -81,7 +82,7 @@ class ConfigFiscalController extends Controller
     /** POST /api/superadmin/config-fiscal/setup-facturapi */
     public function setupFacturapi(Request $request)
     {
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         $ctx      = $this->ctx();
 
         if ($provider === 'facturapi') {
@@ -106,6 +107,20 @@ class ConfigFiscalController extends Controller
             return response()->json(['message' => 'Conexión verificada correctamente', 'org_id' => $orgId]);
         }
 
+        // CFDI Express: registrar a EventPOS como merchant (el CSD se sube después).
+        if ($provider === 'cfdi_express') {
+            try {
+                $result = $this->pac()->setup($ctx);
+            } catch (\Exception $e) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+
+            return response()->json([
+                'message' => 'Emisor registrado. Sube el CSD para empezar a facturar.',
+                'org_id'  => $result['merchant_id'] ?? null,
+            ]);
+        }
+
         // Facturama / SW Sapiens: setup es no-op, solo verificar conexión
         try {
             $this->pac()->test($ctx);
@@ -125,7 +140,7 @@ class ConfigFiscalController extends Controller
             'password' => 'required|string',
         ]);
 
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         $ctx      = $this->ctx();
 
         if ($provider === 'facturapi') {
@@ -152,7 +167,7 @@ class ConfigFiscalController extends Controller
     /** POST /api/superadmin/config-fiscal/test */
     public function test()
     {
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         $ctx      = $this->ctx();
 
         if ($provider === 'facturapi') {
@@ -171,6 +186,24 @@ class ConfigFiscalController extends Controller
         } catch (\Exception $e) {
             return response()->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
+    }
+
+    /** GET /api/superadmin/config-fiscal/balance — saldo prepago central de CFDI Express. */
+    public function balance()
+    {
+        try {
+            $balance = (new \App\Services\Pac\CfdiExpressPac())->balance();
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['data' => [
+            'livemode'          => (bool) ($balance['livemode'] ?? false),
+            'saldo'             => round(((int) ($balance['balanceCentavos'] ?? 0)) / 100, 2),
+            'precio_timbre'     => round(((int) ($balance['pricePerTimbreCentavos'] ?? 0)) / 100, 2),
+            'timbres_restantes' => (int) ($balance['timbresRemaining'] ?? 0),
+            'auto_recarga'      => (bool) ($balance['autoRecharge']['enabled'] ?? false),
+        ]]);
     }
 
     /** DELETE /api/superadmin/config-fiscal/reset */

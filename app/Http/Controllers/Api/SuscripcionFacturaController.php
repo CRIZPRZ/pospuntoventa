@@ -20,7 +20,7 @@ class SuscripcionFacturaController extends Controller
 
     private function superAdminPac(): \App\Services\Pac\PacContract
     {
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         return \App\Services\Pac\PacManager::make($provider);
     }
 
@@ -33,6 +33,7 @@ class SuscripcionFacturaController extends Controller
             'nombre_sat'     => SuperAdminConfig::get('fiscal_razon_social', ''),
             'regimen_fiscal' => SuperAdminConfig::get('fiscal_regimen_fiscal', '601'),
             'codigo_postal'  => SuperAdminConfig::get('fiscal_codigo_postal', ''),
+            'serie'          => SuperAdminConfig::get('fiscal_serie', 'SS'),
             'ambiente'       => $ambiente,
             'org_id'         => SuperAdminConfig::get('fiscal_facturapi_org_id'),
             'org_key'        => $ambiente === 'live'
@@ -43,7 +44,7 @@ class SuscripcionFacturaController extends Controller
 
     private function assertSuperAdminReady(): void
     {
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         $csdSubido = SuperAdminConfig::get('fiscal_csd_subido');
         $rfc = SuperAdminConfig::get('fiscal_rfc');
 
@@ -117,6 +118,11 @@ class SuscripcionFacturaController extends Controller
         $csdSubido = SuperAdminConfig::get('fiscal_csd_subido');
         if (! $csdSubido) {
             abort(422, 'El sistema de facturación aún no está disponible. Intenta más tarde.');
+        }
+
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
+        if ($provider !== 'facturapi') {
+            return $this->solicitarConPac($empresa, $stripeInvoiceId, $data, $provider);
         }
 
         $apiKey = $this->getSuperAdminApiKey();
@@ -196,6 +202,89 @@ class SuscripcionFacturaController extends Controller
         ]);
     }
 
+    /** Timbra el pago de suscripción con el PAC configurado (CFDI Express, SW Sapiens, Facturama). */
+    private function solicitarConPac(\App\Models\Empresa $empresa, string $stripeInvoiceId, array $data, string $provider)
+    {
+        $this->assertSuperAdminReady();
+
+        $monto = $this->getInvoiceAmount($stripeInvoiceId);
+        if ($monto <= 0) {
+            abort(422, 'No se pudo obtener el monto del pago. Intenta más tarde o contacta a soporte.');
+        }
+
+        $ctx      = $this->superAdminCtx();
+        $pac      = $this->superAdminPac();
+        $folio    = (int) SuperAdminConfig::get('fiscal_folio_actual', 0) + 1;
+        $concepto = 'Suscripción Ventas POS — ' . ($empresa->plan?->nombre ?? 'Plan');
+
+        $invoice = [
+            'tipo'        => 'I',
+            'serie'       => SuperAdminConfig::get('fiscal_serie', 'SS'),
+            'folio'       => $folio,
+            'referencia'  => $stripeInvoiceId,
+            'tasa_iva'    => 0.16,
+            'metodo_pago' => 'PUE',
+            'forma_pago'  => '28', // Tarjeta de débito/crédito electrónica (Stripe)
+            'emisor'      => $ctx,
+            'receptor'    => [
+                'es_publico'     => false,
+                'rfc'            => strtoupper(trim($data['receptor_rfc'])),
+                'nombre'         => $data['receptor_nombre'],
+                'codigo_postal'  => $data['receptor_codigo_postal'],
+                'regimen_fiscal' => $data['receptor_regimen_fiscal'],
+                'uso_cfdi'       => $data['receptor_uso_cfdi'],
+            ],
+            'items' => [[
+                'descripcion'    => $concepto,
+                'clave_sat'      => '81161500', // Servicios de tecnología de información
+                'clave_unidad'   => 'E48',
+                'unidad'         => 'Servicio',
+                'cantidad'       => 1,
+                'precio_con_iva' => $monto,
+            ]],
+        ];
+
+        try {
+            $result = $pac->crearFactura($ctx, $invoice);
+        } catch (\Exception $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        SuperAdminConfig::set('fiscal_folio_actual', $folio);
+        $empresa->update(['datos_facturacion' => $data]);
+
+        $xml   = $result['xml'] ?? null;
+        $pacId = $result['pac_id'] ?? null;
+
+        $factura = SuscripcionFactura::create([
+            'empresa_id'        => $empresa->id,
+            'stripe_invoice_id' => $stripeInvoiceId,
+            'cfdi_uuid'         => $result['uuid'] ?? null,
+            'cfdi_pac_id'       => $pacId,
+            'cfdi_pac'          => $provider,
+            'cfdi_xml'          => $xml,
+            'cfdi_status'       => 'timbrado',
+            'receptor'          => $data,
+            'monto'             => $monto,
+            'moneda'            => 'MXN',
+            'concepto'          => $concepto,
+        ]);
+
+        try {
+            if ($empresa->email) {
+                $pdfB64 = base64_encode($pac->descargarPdf(array_merge($ctx, ['cfdi_xml' => $xml]), $pacId));
+                Mail::to($empresa->email)->queue(new FacturaSuscripcionMail($factura, $xml ?? '', $pdfB64));
+            }
+        } catch (\Throwable $e) {
+            Log::error("Error enviando mail factura suscripcion #{$factura->id}: {$e->getMessage()}");
+        }
+
+        return response()->json([
+            'message' => 'CFDI generado correctamente',
+            'factura' => $factura,
+        ]);
+    }
+
     /**
      * POST /api/billing/invoices/{stripeInvoiceId}/auto-facturar
      * Genera CFDI usando los datos de facturación guardados de la empresa.
@@ -237,6 +326,12 @@ class SuscripcionFacturaController extends Controller
             ->where('empresa_id', $empresa->id)
             ->firstOrFail();
 
+        // CFDI Express genera el XML de forma asíncrona: si no se guardó al timbrar, traerlo ahora.
+        if (! $factura->cfdi_xml && $factura->cfdi_pac_id && $factura->cfdi_pac !== 'facturapi') {
+            $pac = \App\Services\Pac\PacManager::make($factura->cfdi_pac);
+            $factura->update(['cfdi_xml' => $pac->descargarXml($this->superAdminCtx(), $factura->cfdi_pac_id)]);
+        }
+
         if (! $factura->cfdi_xml) abort(404, 'XML no disponible');
 
         return response($factura->cfdi_xml, 200, [
@@ -255,10 +350,18 @@ class SuscripcionFacturaController extends Controller
             ->where('empresa_id', $empresa->id)
             ->firstOrFail();
 
-        if (! $factura->cfdi_facturapi_id) abort(404, 'PDF no disponible');
+        if ($factura->cfdi_pac_id && $factura->cfdi_pac && $factura->cfdi_pac !== 'facturapi') {
+            $pac = \App\Services\Pac\PacManager::make($factura->cfdi_pac);
+            $pdf = $pac->descargarPdf(
+                array_merge($this->superAdminCtx(), ['cfdi_xml' => $factura->cfdi_xml]),
+                $factura->cfdi_pac_id
+            );
+        } else {
+            if (! $factura->cfdi_facturapi_id) abort(404, 'PDF no disponible');
 
-        $apiKey = $this->getSuperAdminApiKey();
-        $pdf    = $this->facturapi->descargarPdf($apiKey, $factura->cfdi_facturapi_id);
+            $apiKey = $this->getSuperAdminApiKey();
+            $pdf    = $this->facturapi->descargarPdf($apiKey, $factura->cfdi_facturapi_id);
+        }
 
         return response($pdf, 200, [
             'Content-Type'        => 'application/pdf',
@@ -300,7 +403,7 @@ class SuscripcionFacturaController extends Controller
 
         $this->assertSuperAdminReady();
 
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         $ctx      = $this->superAdminCtx();
         $pac      = $this->superAdminPac();
         $serie    = SuperAdminConfig::get('fiscal_serie', 'SS');
@@ -450,7 +553,7 @@ class SuscripcionFacturaController extends Controller
 
         $this->assertSuperAdminReady();
 
-        $provider = SuperAdminConfig::get('fiscal_pac_provider', 'facturama');
+        $provider = SuperAdminConfig::get('fiscal_pac_provider', \App\Services\Pac\PacManager::DEFAULT);
         $ctx      = $this->superAdminCtx();
         $pac      = $this->superAdminPac();
         $serie    = SuperAdminConfig::get('fiscal_serie', 'SS');

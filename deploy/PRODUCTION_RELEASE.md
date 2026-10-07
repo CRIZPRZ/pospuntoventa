@@ -235,3 +235,29 @@ Si el release falla:
 3. Ejecutar `php artisan optimize:clear && php artisan optimize`.
 4. Restaurar la base solo si una migración destructiva lo requiere.
 5. No borrar el volumen `baileys-sessions`.
+
+## Reset completo de tenants (dejar la plataforma limpia)
+
+Borra todas las empresas y sus datos. Conserva superadmins, planes (con
+`stripe_price_id`), permisos, configuración fiscal y el instalador desktop.
+Detalles en `CLAUDE.md` → "Reset completo de tenants".
+
+1. Cancelar en el dashboard de Stripe las suscripciones de los tenants (el
+   comando se niega a correr si alguna empresa tiene `stripe_subscription_id`).
+2. Respaldo (sección 1).
+3. Simular y revisar la lista:
+   ```bash
+   php artisan tenants:reset
+   ```
+4. Ejecutar:
+   ```bash
+   php artisan tenants:reset --execute
+   ```
+   (con suscripciones ya canceladas en Stripe: agregar `--ignore-stripe`).
+5. Verificar que Baileys no conserve sesiones viejas:
+   ```bash
+   docker exec <contenedor-baileys> ls /app/sessions
+   ```
+   Debe quedar vacío.
+
+Nunca usar `php artisan migrate:fresh` para esto.

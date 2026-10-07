@@ -39,6 +39,14 @@ return [
         'user_key' => env('FACTURAPI_USER_KEY'),
     ],
 
+    // PAC por defecto. El modo (test|live) es global del servidor.
+    'cfdi_express' => [
+        'url'      => env('CFDI_EXPRESS_URL', 'https://api.cfdi.express'),
+        'mode'     => env('CFDI_EXPRESS_MODE', 'test'),
+        'test_key' => env('CFDI_EXPRESS_TEST_KEY'),
+        'live_key' => env('CFDI_EXPRESS_LIVE_KEY'),
+    ],
+
     'facturama' => [
         'user'     => env('FACTURAMA_USER'),
         'password' => env('FACTURAMA_PASSWORD'),
