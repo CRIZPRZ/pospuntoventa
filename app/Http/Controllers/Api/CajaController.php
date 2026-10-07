@@ -49,6 +49,16 @@ class CajaController extends Controller
             'observaciones'  => ['nullable', 'string'],
         ]);
 
+        // El mínimo se validaba solo en el frontend (AbrirCaja.jsx): desktop viejo o la API
+        // directa podían abrir caja por debajo. Misma config (pos por sucursal) que usa la UI.
+        $pos    = app(ConfiguracionController::class)->mergedConfig()['pos'] ?? [];
+        $minimo = (float) ($pos['fondo_minimo_apertura'] ?? 0);
+        if ($minimo > 0 && (float) $data['fondo_inicial'] < $minimo) {
+            return response()->json([
+                'message' => 'El fondo mínimo para abrir caja es $' . number_format($minimo, 2) . '.',
+            ], 422);
+        }
+
         if ($this->modoCaja() === 'compartida') {
             // Verificar que no haya caja abierta en esta sucursal (por cualquier usuario)
             $cajaQ = Caja::where('estado', 'abierta');
