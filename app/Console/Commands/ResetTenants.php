@@ -145,11 +145,15 @@ class ResetTenants extends Command
         return self::SUCCESS;
     }
 
-    /** Todas las tablas de la base, menos las globales que se conservan. */
+    /** Todas las tablas de ESTA base, menos las globales que se conservan. */
     private function tablesToWipe(): array
     {
-        $tables = collect(Schema::getTableListing())
-            ->map(fn ($name) => str_contains($name, '.') ? substr($name, strrpos($name, '.') + 1) : $name)
+        // Sin schema, MySQL lista las tablas de TODAS las bases visibles para el usuario
+        // (en producción el mismo servidor hospeda otras apps). Limitar a la base actual.
+        $connection = DB::connection();
+        $schema     = $connection->getDriverName() === 'sqlite' ? 'main' : $connection->getDatabaseName();
+
+        $tables = collect(Schema::getTableListing($schema, false))
             ->reject(fn ($name) => in_array($name, self::KEEP, true))
             ->values()
             ->all();
